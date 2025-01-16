@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import List, Tuple
+from modules.spectrum_analysis import power_spectrum
 
 def plot_signal_spectra(
     freqs, 
