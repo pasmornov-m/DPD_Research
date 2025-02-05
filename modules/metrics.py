@@ -3,9 +3,10 @@ import numpy as np
 from modules.utils import to_torch_tensor
 
 def compute_mse(prediction, ground_truth):
-    prediction, ground_truth = map(to_torch_tensor, (prediction, ground_truth))
+    prediction = to_torch_tensor(prediction)
+    ground_truth = to_torch_tensor(ground_truth)
     mse = ((ground_truth.real - prediction.real) ** 2 + (ground_truth.imag - prediction.imag) ** 2).mean()
-    return mse.item()
+    return mse
 
 def compute_nmse(prediction, ground_truth):
     prediction, ground_truth = map(to_torch_tensor, (prediction, ground_truth))
@@ -13,7 +14,7 @@ def compute_nmse(prediction, ground_truth):
     energy = (ground_truth.real ** 2 + ground_truth.imag ** 2).mean()
     if energy == 0:
         raise ZeroDivisionError("Energy of the ground truth is zero.")
-    return 10 * torch.log10(mse / energy).item()
+    return 10 * torch.log10(mse / energy)
 
 def calculate_am_am(input_data, output_data):
     assert input_data.shape == output_data.shape, "input_data and output_data must have the same shape"

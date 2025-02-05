@@ -50,7 +50,7 @@ release(hACPR);
 
 [ACPR_dla_grad, mainChannelPower_dla_grad, adjChannelPower_dla_grad] = hACPR(y_linearized_dla_grad);
 [ACPR_ila_grad, mainChannelPower_ila_grad, adjChannelPower_ila_grad] = hACPR(y_linearized_ila_grad);
-[ACPR_ilc_grad, mainChannelPower_ilc_grad, adjChannelPower_ilc_grad] = hACPR(y_linearized_ila_grad);
+[ACPR_ilc_grad, mainChannelPower_ilc_grad, adjChannelPower_ilc_grad] = hACPR(y_linearized_ilc_grad);
 
 
 fprintf('ACPR in:           %.2f %.2f\n', ACPR_in(1), ACPR_in(2))
