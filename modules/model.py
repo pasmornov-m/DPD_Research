@@ -3,100 +3,105 @@ import os
 from modules.utils import to_torch_tensor, check_early_stopping
 from modules.metrics import compute_mse
 
+
 class GeneralizedMemoryPolynomial:
-    def __init__(self, Ka, Ma, Kb, Mb, Kc, Mc, P, Q, model_type):
-        self.Ka, self.Ma = Ka, Ma
-        self.Kb, self.Mb = Kb, Mb
-        self.Kc, self.Mc = Kc, Mc
-        self.P, self.Q = P, Q
+    def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, model_type):
+        self.Ka, self.La = Ka, La
+        self.Kb, self.Lb, self.Mb = Kb+1, Lb, Mb+1
+        self.Kc, self.Lc, self.Mc = Kc+1, Lc, Mc+1
         self.model_type = model_type
 
-        self.am = torch.nn.Parameter(0.01 * torch.randn((self.Ma + 1, self.Ka), dtype=torch.cfloat, requires_grad=True))
-        self.bm = torch.nn.Parameter(0.01 * torch.randn((self.Mb + 1, self.Kb, self.P), dtype=torch.cfloat, requires_grad=True))
-        self.cm = torch.nn.Parameter(0.01 * torch.randn((self.Mc + 1, self.Kc, self.Q), dtype=torch.cfloat, requires_grad=True))
-    
-    def compute_output(self, iq_data):
-        iq_data = to_torch_tensor(iq_data)
+        self.a = torch.nn.Parameter(0.001 * torch.randn((self.Ka, self.La), dtype=torch.cfloat, requires_grad=True))
+        self.b = torch.nn.Parameter(0.001 * torch.randn((self.Kb, self.Lb, self.Mb), dtype=torch.cfloat, requires_grad=True))
+        self.c = torch.nn.Parameter(0.001 * torch.randn((self.Kc, self.Lc, self.Mc), dtype=torch.cfloat, requires_grad=True))
 
-        N = len(iq_data)
-        yGMP = torch.zeros(N, dtype=torch.cfloat, device=iq_data.device)
+        self.coeffs_a = self.a.unsqueeze(-1)
+        self.coeffs_b = self.b.unsqueeze(-1)
+        self.coeffs_c = self.c.unsqueeze(-1)
 
-        for m in range(self.Ma + 1):
-            max_len = N - m
-            if max_len > 0:
-                terms = (
-                    self.am[m, :self.Ka].unsqueeze(0) * iq_data[:max_len].unsqueeze(1) *
-                    torch.abs(iq_data[:max_len].unsqueeze(1)) ** torch.arange(self.Ka, device=iq_data.device)
-                )
-                yGMP[:max_len] += terms.sum(dim=1)
+        self.powers_Ka = torch.arange(self.Ka)
+        self.powers_Kb = torch.arange(self.Kb)
+        self.powers_Kc = torch.arange(self.Kc)
 
-        for m in range(self.Mb + 1):
-            for p in range(1, self.P + 1):
-                max_len = N - (m + p)
-                if max_len > 0:
-                    terms = (
-                        self.bm[m, :self.Kb, p - 1].unsqueeze(0) * iq_data[:max_len].unsqueeze(1) *
-                        torch.abs(iq_data[p:p + max_len].unsqueeze(1)) ** torch.arange(self.Kb, device=iq_data.device)
-                    )
-                    yGMP[:max_len] += terms.sum(dim=1)
+        self.indices_La = torch.arange(self.La).unsqueeze(1)
+        self.indices_Lb = torch.arange(self.Lb).unsqueeze(1)
+        self.indices_Lc = torch.arange(self.Lc).unsqueeze(1)
 
-        for m in range(self.Mc + 1):
-            for q in range(1, self.Q + 1):
-                max_len = N - (m + q)
-                if max_len > 0:
-                    terms = (
-                        self.cm[m, :self.Kc, q - 1].unsqueeze(0) * iq_data[q:q + max_len].unsqueeze(1) *
-                        torch.abs(iq_data[:max_len].unsqueeze(1)) ** torch.arange(self.Kc, device=iq_data.device)
-                    )
-                    yGMP[:max_len] += terms.sum(dim=1)
+        self.indices_Mb = torch.arange(self.Mb).unsqueeze(0).unsqueeze(2)
+        self.indices_Mc = torch.arange(self.Mc).unsqueeze(0).unsqueeze(2)
+        
 
-        return yGMP
+    def compute_output(self, x):
+        y = torch.zeros_like(x, dtype=torch.cfloat)
+
+        N = len(x)
+        indices_N = torch.arange(N).unsqueeze(0)
+
+        y += compute_terms(self.coeffs_a, x, N, indices_N, self.powers_Ka, self.indices_La)
+        y += compute_terms(self.coeffs_b, x, N, indices_N, self.powers_Kb, self.indices_Lb, self.indices_Mb, sign=-1)
+        y += compute_terms(self.coeffs_c, x, N, indices_N, self.powers_Kc, self.indices_Lc, self.indices_Mc, sign=+1)
+
+        return y
+
 
     def optimize_coefficients_grad(self, input_data, target_data, epochs=100000, learning_rate=0.01):
         input_data, target_data = map(to_torch_tensor, (input_data, target_data))
-        best_loss = float('inf')
-        no_improve_epochs = 0
-        epoch_before_break = 25
-        r_order = 7
-        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, eps = 1e-16, betas=(0.9, 0.999), weight_decay=1e-2, amsgrad=True)                
+        
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, amsgrad=True)
         for epoch in range(epochs):
             optimizer.zero_grad()
             output = self.compute_output(input_data)
             loss = compute_mse(output, target_data)
             loss.backward()
             optimizer.step()
-            current_loss = loss.item()
 
-            print(f"Epoch [{epoch + 1}/{epochs}], Loss: {current_loss}")
-            self.save_coefficients()
+            print(f"Epoch [{epoch + 1}/{epochs}], Loss: {loss.item()}")
 
-            stop, best_loss, no_improve_epochs = check_early_stopping(current_loss, best_loss, r_order, epoch_before_break, no_improve_epochs, epoch)
-            if stop:
-                break
 
     def parameters(self):
-        return [self.am, self.bm, self.cm]        
+        return [self.a, self.b, self.c]
     
+
+    # сохранение коэффициентов
     def save_coefficients(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
-        filename = f"{directory}/{self.model_type}_gmp_model_Ka{self.Ka}_Ma{self.Ma}_Kb{self.Kb}_Mb{self.Mb}_Kc{self.Kc}_Mc{self.Mc}_P{self.P}_Q{self.Q}.pt"
+        filename = f"{directory}/{self.model_type}_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}.pt"
         torch.save({
-                'am': self.am,
-                'bm': self.bm,
-                'cm': self.cm
+                'a': self.a,
+                'b': self.b,
+                'c': self.c
             }, filename)
         print(f"Coefficients saved to {filename}")
 
+
+    # загрузка коэффициентов из файла
     def load_coefficients(self, directory="model_params"):
-        filename = f"{directory}/{self.model_type}_gmp_model_Ka{self.Ka}_Ma{self.Ma}_Kb{self.Kb}_Mb{self.Mb}_Kc{self.Kc}_Mc{self.Mc}_P{self.P}_Q{self.Q}.pt"
+        filename = f"{directory}/{self.model_type}_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}.pt"
         if os.path.isfile(filename):
             checkpoint = torch.load(filename)
-            self.am = torch.nn.Parameter(checkpoint['am'])
-            self.bm = torch.nn.Parameter(checkpoint['bm'])
-            self.cm = torch.nn.Parameter(checkpoint['cm'])
+            with torch.no_grad():
+                self.a.copy_(checkpoint['a'])
+                self.b.copy_(checkpoint['b'])
+                self.c.copy_(checkpoint['c'])
             print(f"Coefficients loaded from {filename}")
             return True
         else:
             print(f"No saved coefficients found at {filename}, initializing new parameters.")
             return False
-    
+
+
+def compute_terms(coeffs, x, N, indices_N, powers_K, indices_L, indices_M=None, sign=0):
+
+    if indices_M is None:
+        indices = indices_N - indices_L
+    else:
+        indices = indices_N.unsqueeze(1) - indices_L.unsqueeze(2) + sign * indices_M
+
+    indices = indices.clamp(min=0, max=N-1)
+    x_truncated = x[indices]
+    abs_x_powers = torch.abs(x_truncated)[..., None] ** powers_K
+    x_scaled = x_truncated[..., None] * abs_x_powers
+
+    term = (coeffs * x_scaled.permute(-1, 0, 1, *([2] if indices_M is not None else []))).sum(dim=tuple(range(len(x_scaled.shape) - 1)))
+
+    return term
