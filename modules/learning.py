@@ -56,7 +56,7 @@ def ilc_signal_grad(input_data, target_data, pa_model, max_iterations=1000000, l
     input_data, target_data = map(to_torch_tensor, (input_data, target_data))
     u = torch.nn.Parameter(input_data.clone(), requires_grad=True)
 
-    optimizer = torch.optim.AdamW([u], lr=learning_rate, eps = 1e-16, betas=(0.9, 0.999), weight_decay=1e-5, amsgrad=True)
+    optimizer = torch.optim.AdamW([u], lr=learning_rate, amsgrad=True)
     for param in pa_model.parameters():
         param.requires_grad = False
 

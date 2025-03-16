@@ -8,7 +8,8 @@ def plot_signal_spectra(
     spectra: List[Tuple[np.ndarray, str, str]], 
     title="Спектр сигнала", 
     xlabel="Частота (МГц)", 
-    ylabel= "Мощность (дБ)", 
+    ylabel= "Мощность (дБ)",
+    fontsize = 12,
     figsize=(12, 6)
     ):
     
@@ -17,9 +18,9 @@ def plot_signal_spectra(
     for spectrum, color, label in spectra:
         plt.plot(freqs / 1e6, 10 * np.log10(np.abs(spectrum)), color=color, label=label)
 
-    plt.title(title)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
+    plt.title(title, fontsize=fontsize)
+    plt.xlabel(xlabel, fontsize=fontsize)
+    plt.ylabel(ylabel, fontsize=fontsize)
     plt.legend()
     plt.grid()
     plt.show()

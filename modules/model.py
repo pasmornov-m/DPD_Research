@@ -29,7 +29,10 @@ class GeneralizedMemoryPolynomial:
 
         self.indices_Mb = torch.arange(self.Mb).unsqueeze(0).unsqueeze(2)
         self.indices_Mc = torch.arange(self.Mc).unsqueeze(0).unsqueeze(2)
-        
+    
+    def number_parameters(self):
+        number_of_params = (self.Ka*self.La)+(self.Kb*self.Lb*self.Mb)+(self.Kc*self.Lc*self.Mc)
+        return number_of_params
 
     def compute_output(self, x):
         y = torch.zeros_like(x, dtype=torch.cfloat)
@@ -92,16 +95,26 @@ class GeneralizedMemoryPolynomial:
 
 def compute_terms(coeffs, x, N, indices_N, powers_K, indices_L, indices_M=None, sign=0):
 
+    indices_1 = indices_N - indices_L
+    
     if indices_M is None:
-        indices = indices_N - indices_L
+        indices_2 = indices_1
     else:
-        indices = indices_N.unsqueeze(1) - indices_L.unsqueeze(2) + sign * indices_M
+        indices_2 = indices_N.unsqueeze(1) - indices_L.unsqueeze(2) + sign * indices_M
 
-    indices = indices.clamp(min=0, max=N-1)
-    x_truncated = x[indices]
-    abs_x_powers = torch.abs(x_truncated)[..., None] ** powers_K
-    x_scaled = x_truncated[..., None] * abs_x_powers
+    indices_1 = indices_1.clamp(min=0, max=N-1)
+    indices_2 = indices_2.clamp(min=0, max=N-1)
 
+    x_truncated_1 = x[indices_1]
+    x_truncated_2 = x[indices_2]
+
+    abs_x_powers = torch.abs(x_truncated_2).unsqueeze(-1) ** powers_K
+
+    if indices_M is None:
+        x_scaled = x_truncated_1.unsqueeze(-1) * abs_x_powers
+    else:
+        x_scaled = x_truncated_1.unsqueeze(1).unsqueeze(-1) * abs_x_powers
+    
     term = (coeffs * x_scaled.permute(-1, 0, 1, *([2] if indices_M is not None else []))).sum(dim=tuple(range(len(x_scaled.shape) - 1)))
 
     return term

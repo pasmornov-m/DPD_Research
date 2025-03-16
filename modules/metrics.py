@@ -89,8 +89,8 @@ def power_spectrum(input_data, fs, nperseg):
 def calculate_acpr(eng, input_data, fs, bw_main_ch, nperseg):
     signal_numpy = input_data.numpy()
     signal_matlab = matlab.double(np.column_stack((signal_numpy.real, signal_numpy.imag)).tolist())
-    acpr_left, acpr_right = eng.compute_acpr(signal_matlab, fs, bw_main_ch, nperseg, nargout=2)
-    acpr_left, acpr_right = map(np.float32, (acpr_left, acpr_right))
+    result = eng.compute_acpr(signal_matlab, fs, bw_main_ch, nperseg, nargout=1)
+    acpr_left, acpr_right = float(result[0][0]), float(result[0][1])
     return acpr_left, acpr_right
 
 
