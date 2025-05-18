@@ -12,6 +12,7 @@ def optimize_dla_grad(input_data, target_data, dpd_model, pa_model, epochs=10000
             
     for epoch in range(epochs):
         optimizer.zero_grad()
+
         dpd_output = dpd_model.compute_output(input_data)
         pa_output = pa_model.compute_output(dpd_output)
 
