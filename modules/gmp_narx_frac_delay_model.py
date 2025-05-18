@@ -37,13 +37,15 @@ class NARX_FracDelays_GMP(GMP):
 
         y_total = y_gmp
         
-        y_ar = self._compute_autoregression(N, y_total, use_smoothed_ar=False)
+        y_ar = self._compute_autoregression(N, y_total, use_smoothed_ar=True)
 
         y = y_total + y_ar
         return y
 
     def optimize_coefficients_grad(self, input_data, target_data, epochs=100000, learning_rate=0.01):
         input_data, target_data = map(to_torch_tensor, (input_data, target_data))
+
+        
         
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, amsgrad=True)
         for epoch in range(epochs):
@@ -54,7 +56,7 @@ class NARX_FracDelays_GMP(GMP):
             optimizer.step()
             
             if epoch%100==0:
-                print(f"Epoch [{epoch + 1}/{epochs}], Loss: {loss.item()}")
+                print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
     
 
     # сохранение коэффициентов
@@ -89,17 +91,22 @@ class NARX_FracDelays_GMP(GMP):
             #    s[n] = (1-α) * sum_{k=0..n-1} α^(n-k-1) * y_gmp[k]
             alpha = torch.sigmoid(self.logit_alpha)
             one_minus = 1 - alpha
-            # отклик длины N
+
             h = one_minus * alpha ** torch.arange(N, dtype=y_real.dtype)
-            # подготавливаем сигналы (1,1,N) и пададим слева (N-1,0)
+            
             y_r_p = F.pad(y_real.view(1,1,N), (N-1,0))
             y_i_p = F.pad(y_imag.view(1,1,N), (N-1,0))
-            # свёрточное ядро (перевёрнутое h)
             kernel = h.flip(0).view(1,1,N)
             # делаем conv1d → (1,1,N)
-            s_r = F.conv1d(y_r_p, kernel)
-            s_i = F.conv1d(y_i_p, kernel)
-            s = (s_r + 1j * s_i).view(N)
+            # s_r = F.conv1d(y_r_p, kernel)
+            # s_i = F.conv1d(y_i_p, kernel)
+            # s = (s_r + 1j * s_i).view(N)
+
+            y_complex = torch.stack([y_r_p, y_i_p], dim=1)
+            kernel_complex = torch.stack([kernel, kernel], dim=0)
+            out = F.conv1d(y_complex, kernel_complex, groups=2)    # (1,2,N)
+            s = out[:,0,:] + 1j*out[:,1,:]
+
             # масштабируем
             y_ar = self.d_s * s
 
