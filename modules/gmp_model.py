@@ -18,8 +18,10 @@ class GMP(nn.Module):
         self.c = torch.nn.Parameter(0.001 * torch.randn((self.Kc, self.Lc, self.Mc), dtype=torch.cfloat))
 
         self.coeffs_a = self.a.unsqueeze(-1)
-        self.coeffs_b = self.b.unsqueeze(-1)
-        self.coeffs_c = self.c.unsqueeze(-1)
+        # self.coeffs_b = self.b.unsqueeze(-1)
+        # self.coeffs_c = self.c.unsqueeze(-1)
+        self.coeffs_b = self.b
+        self.coeffs_c = self.c
 
         self.powers_Ka = torch.arange(self.Ka)
         self.powers_Kb = torch.arange(self.Kb)
@@ -37,7 +39,7 @@ class GMP(nn.Module):
         return number_of_params
 
     def forward(self, x):
-        N = len(x)
+        N = x.shape[0]
         indices_N = torch.arange(N).unsqueeze(0)
         y = self._sum_terms(x, N, indices_N)
         return y
@@ -75,9 +77,7 @@ class GMP(nn.Module):
             print(f"No saved coefficients found at {filename}, initializing new parameters.")
             return False
 
-
     def _compute_terms(self, coeffs, x, N, indices_N, powers_K, indices_L, indices_M=None, sign=0):
-
         indices_1 = indices_N - indices_L
         
         if indices_M is None:
@@ -92,13 +92,16 @@ class GMP(nn.Module):
         x_truncated_2 = x[indices_2]
 
         abs_x_powers = torch.abs(x_truncated_2).unsqueeze(-1) ** powers_K
+        abs_x_powers = abs_x_powers.type_as(x_truncated_1)
 
         if indices_M is None:
-            x_scaled = x_truncated_1.unsqueeze(-1) * abs_x_powers
+            # x_scaled = x_truncated_1.unsqueeze(-1) * abs_x_powers
+            # term = torch.einsum('kln,lnk->n', coeffs, x_scaled)
+            term = torch.einsum('kln,ln,lnk->n', coeffs, x_truncated_1, abs_x_powers)
         else:
-            x_scaled = x_truncated_1.unsqueeze(1).unsqueeze(-1) * abs_x_powers
-        
-        term = (coeffs * x_scaled.permute(-1, 0, 1, *([2] if indices_M is not None else []))).sum(dim=tuple(range(len(x_scaled.shape) - 1)))
+            # x_scaled = x_truncated_1.unsqueeze(1).unsqueeze(-1) * abs_x_powers
+            # term = torch.einsum('klm,lmnk->n', coeffs, x_scaled)
+            term = torch.einsum('klm,ln,lmnk->n', coeffs, x_truncated_1, abs_x_powers)
 
         return term
     

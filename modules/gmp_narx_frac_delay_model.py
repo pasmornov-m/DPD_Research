@@ -1,6 +1,6 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch.func import vmap
 import os
 from modules.utils import to_torch_tensor, check_early_stopping
 from modules.metrics import compute_mse
@@ -17,6 +17,10 @@ class NARX_FracDelays_GMP(GMP):
         self.deltas = torch.nn.Parameter(0.5 * torch.ones(P_fd, dtype=torch.float))
         self.logit_alpha = torch.nn.Parameter(torch.logit(torch.tensor(0.9)))
         self.d_s = torch.nn.Parameter(torch.tensor(0.001, dtype=torch.float))
+
+        deltas_transform = self.deltas.view(-1, 1)
+        kernels = torch.stack([1 - deltas_transform, deltas_transform], dim=1)
+        self.kernels = kernels.view(self.P_fd,1,2)
     
     def number_parameters(self):
         num_gmp = self.Ka * self.La + self.Kb * self.Lb * self.Mb + self.Kc * self.Lc * self.Mc
@@ -26,39 +30,16 @@ class NARX_FracDelays_GMP(GMP):
         return num_params
 
     def forward(self, x):
-        N = len(x)
-
+        N = x.shape[0]
         y_gmp = super().forward(x)
-        
-        # 2) дробные задержки: единый conv1d батч
-        deltas = self.deltas.view(-1, 1)            # (P_fd,1)
-        kernels = torch.stack([1 - deltas, deltas], dim=1)       # (P_fd,2)
-        kernels = kernels.view(self.P_fd,1,2)                        # (P_fd,1,2)
+                
+        # y_total = self._frac_delay(x, y_gmp)
 
-        x_real = x.real.view(1,1,N)
-        x_img  = x.imag.view(1,1,N)
-        x_fd_real = F.conv1d(x_real, kernels, padding=0)  # (P_fd,1,N-1)
-        x_fd_img  = F.conv1d(x_img,  kernels, padding=0)
-        # паддим один раз:
-        x_fd_real = F.pad(x_fd_real, (0,1))
-        x_fd_img = F.pad(x_fd_img, (0,1))
-
-        x_fd = (x_fd_real + 1j * x_fd_img)[:, 0, :]  # shape: (P_fd, N)
-
-
-        # 3) батчевое вычисление gmp-термов
-        # соберем (P_fd+1, N) сигналы: первая строка исходный x
-        batch_x = torch.cat([x.unsqueeze(0), x_fd], dim=0)     # (P_fd+1, N)
-        # применяем _sum_terms к батчу
-        # реализуем батч версию внутри forward
-        indices = torch.arange(N).unsqueeze(0)  # (1,N)
-        # отложим аккумуляцию
         y_total = y_gmp
-        for bx in batch_x:
-            y_total = y_total + self._sum_terms(bx, N, indices)
-        y_ar = self._compute_autoregression(N, y_total, use_smoothed_ar=True)
+        
+        y_ar = self._compute_autoregression(N, y_total, use_smoothed_ar=False)
 
-        y = y_gmp + y_ar
+        y = y_total + y_ar
         return y
 
     def optimize_coefficients_grad(self, input_data, target_data, epochs=100000, learning_rate=0.01):
@@ -71,8 +52,9 @@ class NARX_FracDelays_GMP(GMP):
             loss = compute_mse(output, target_data)
             loss.backward()
             optimizer.step()
-
-            print(f"Epoch [{epoch + 1}/{epochs}], Loss: {loss.item()}")
+            
+            if epoch%100==0:
+                print(f"Epoch [{epoch + 1}/{epochs}], Loss: {loss.item()}")
     
 
     # сохранение коэффициентов
@@ -96,50 +78,73 @@ class NARX_FracDelays_GMP(GMP):
 
 
     def _compute_autoregression(self, N, y_gmp, use_smoothed_ar=True):
-        if y_gmp.shape[0] < self.Dy:
+        if N < self.Dy:
             raise ValueError(f"Для Dy={self.Dy} требуется хотя бы {self.Dy+1} отсчетов в y_gmp.")
 
-        y_ar = torch.zeros_like(y_gmp)
+        y_real = y_gmp.real
+        y_imag = y_gmp.imag
 
         if use_smoothed_ar:
-            # === Смягчённая авторегрессия (экспоненциальная память) ===
-            alpha = torch.sigmoid(self.logit_alpha) if hasattr(self, 'logit_alpha') else 0.9  # по умолчанию
-
-            s_list = [torch.zeros_like(y_gmp[0])]
-            for n in range(1, N):
-                s_new = alpha * s_list[-1] + (1 - alpha) * y_gmp[n - 1]
-                s_list.append(s_new)
-
-            s = torch.stack(s_list)
-
-            # y_ar = d_s * s (где d_s — обучаемый параметр)
-            d_s = self.d_s if hasattr(self, 'd_s') else 0.001  # по умолчанию
-            y_ar = d_s * s
+            # 1) экспоненциальная память:
+            #    s[n] = (1-α) * sum_{k=0..n-1} α^(n-k-1) * y_gmp[k]
+            alpha = torch.sigmoid(self.logit_alpha)
+            one_minus = 1 - alpha
+            # отклик длины N
+            h = one_minus * alpha ** torch.arange(N, dtype=y_real.dtype)
+            # подготавливаем сигналы (1,1,N) и пададим слева (N-1,0)
+            y_r_p = F.pad(y_real.view(1,1,N), (N-1,0))
+            y_i_p = F.pad(y_imag.view(1,1,N), (N-1,0))
+            # свёрточное ядро (перевёрнутое h)
+            kernel = h.flip(0).view(1,1,N)
+            # делаем conv1d → (1,1,N)
+            s_r = F.conv1d(y_r_p, kernel)
+            s_i = F.conv1d(y_i_p, kernel)
+            s = (s_r + 1j * s_i).view(N)
+            # масштабируем
+            y_ar = self.d_s * s
 
         else:
-            # === Классическая AR-модель ===
-            X_ar = torch.stack([y_gmp[self.Dy - j - 1:N - j - 1] for j in range(self.Dy)], dim=1)
-            y_ar_part = X_ar @ self.d
-            y_ar[self.Dy:] = y_ar_part
+            # 2) классическая AR через conv1d
+            # pad=(Dy,0) чтобы результат тоже длиной N
+            pad = (self.Dy, 0)
+            y_r_p = F.pad(y_real.view(1,1,N), pad)
+            y_i_p = F.pad(y_imag.view(1,1,N), pad)
+            # готовим ядра из d (переворачиваем, чтобы conv давал автоковариацию)
+            dr = self.d.real.flip(0).view(1,1,self.Dy)
+            di = self.d.imag.flip(0).view(1,1,self.Dy)
+            # комплексная свёртка: (a+jb)*(c+jd) = (ac - bd) + j(ad + bc)
+            ar_r = F.conv1d(y_r_p, dr) - F.conv1d(y_i_p, di)
+            ar_i = F.conv1d(y_r_p, di) + F.conv1d(y_i_p, dr)
+            y_ar = (ar_r + 1j * ar_i)[..., :N].view(N)
 
         return y_ar
 
     
-    def _frac_delay(self, x, delta):
+    def _frac_delay(self, x, y_gmp):
         N = x.shape[0]
-        k = int(torch.floor(torch.tensor(delta)).item())
-        alpha = delta - k
+        x_real = x.real.view(1,1,N)
+        x_img  = x.imag.view(1,1,N)
+        x_fd_real = F.conv1d(x_real, self.kernels, padding=0)
+        x_fd_img  = F.conv1d(x_img,  self.kernels, padding=0)
 
-        idx_0 = torch.arange(N) - k
-        idx_1 = idx_0 - 1
+        x_fd_real = F.pad(x_fd_real, (0,1))
+        x_fd_img = F.pad(x_fd_img, (0,1))
 
-        idx_0 = idx_0.clamp(0, N - 1)
-        idx_1 = idx_1.clamp(0, N - 1)
+        x_fd = (x_fd_real + 1j * x_fd_img)
+        x_fd = x_fd[:, 0, :]
 
-        x0 = x[idx_0]
-        x1 = x[idx_1]
+        batch_x = torch.cat([x.unsqueeze(0), x_fd], dim=0)
+        indices = torch.arange(N).unsqueeze(0)
 
-        return (1 - alpha) * x0 + alpha * x1
+        # y_total = y_gmp
+        # for bx in batch_x:
+        #     y_total = y_total + self._sum_terms(bx, N, indices)
+
+        sum_terms_batch = vmap(lambda bx: self._sum_terms(bx, N, indices), in_dims=0, out_dims=0)
+        terms = sum_terms_batch(batch_x)
+        y_total = y_gmp + terms.sum(dim=0)
+
+        return y_total
 
 
 
