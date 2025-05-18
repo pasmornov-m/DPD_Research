@@ -18,6 +18,8 @@ class NARX_FracDelays_GMP(GMP):
         self.logit_alpha = torch.nn.Parameter(torch.logit(torch.tensor(0.9)))
         self.d_s = torch.nn.Parameter(torch.tensor(0.001, dtype=torch.float))
 
+        self.logit_weights = torch.nn.Parameter(torch.tensor([0.001, 0.001, 0.001]))
+
         deltas_transform = self.deltas.view(-1, 1)
         kernels = torch.stack([1 - deltas_transform, deltas_transform], dim=1)
         self.kernels = kernels.view(self.P_fd,1,2)
@@ -30,23 +32,20 @@ class NARX_FracDelays_GMP(GMP):
         return num_params
 
     def forward(self, x):
-        N = x.shape[0]
         y_gmp = super().forward(x)
-                
-        # y_total = self._frac_delay(x, y_gmp)
+        y_frac = self._frac_delay(x, y_gmp)
+        y_ar = self._compute_autoregression(y_gmp)
 
-        y_total = y_gmp
-        
-        y_ar = self._compute_autoregression(N, y_total, use_smoothed_ar=True)
+        weights = torch.softmax(self.logit_weights, dim=0)
+        w_gmp, w_frac, w_ar = weights
+        y = w_gmp * y_gmp + w_frac * y_frac + w_ar * y_ar
 
-        y = y_total + y_ar
+        # y = y_gmp + y_frac + y_ar
+
         return y
 
     def optimize_coefficients_grad(self, input_data, target_data, epochs=100000, learning_rate=0.01):
         input_data, target_data = map(to_torch_tensor, (input_data, target_data))
-
-        
-        
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, amsgrad=True)
         for epoch in range(epochs):
             optimizer.zero_grad()
@@ -79,50 +78,22 @@ class NARX_FracDelays_GMP(GMP):
             return False
 
 
-    def _compute_autoregression(self, N, y_gmp, use_smoothed_ar=True):
+    def _compute_autoregression(self, y_gmp):
+        N = y_gmp.shape[0]
         if N < self.Dy:
             raise ValueError(f"Для Dy={self.Dy} требуется хотя бы {self.Dy+1} отсчетов в y_gmp.")
 
-        y_real = y_gmp.real
-        y_imag = y_gmp.imag
+        # X_ar = torch.stack([y_gmp[self.Dy-j-1:N-j-1] for j in range(self.Dy)], dim=1)
+        # y_ar_part = X_ar @ self.d 
+        # y_ar = torch.zeros_like(y_gmp)
+        # y_ar[self.Dy:] = y_ar_part
 
-        if use_smoothed_ar:
-            # 1) экспоненциальная память:
-            #    s[n] = (1-α) * sum_{k=0..n-1} α^(n-k-1) * y_gmp[k]
-            alpha = torch.sigmoid(self.logit_alpha)
-            one_minus = 1 - alpha
+        X_ar = y_gmp.unfold(0, self.Dy, 1)
+        y_ar_part = X_ar @ self.d
 
-            h = one_minus * alpha ** torch.arange(N, dtype=y_real.dtype)
-            
-            y_r_p = F.pad(y_real.view(1,1,N), (N-1,0))
-            y_i_p = F.pad(y_imag.view(1,1,N), (N-1,0))
-            kernel = h.flip(0).view(1,1,N)
-            # делаем conv1d → (1,1,N)
-            # s_r = F.conv1d(y_r_p, kernel)
-            # s_i = F.conv1d(y_i_p, kernel)
-            # s = (s_r + 1j * s_i).view(N)
-
-            y_complex = torch.stack([y_r_p, y_i_p], dim=1)
-            kernel_complex = torch.stack([kernel, kernel], dim=0)
-            out = F.conv1d(y_complex, kernel_complex, groups=2)    # (1,2,N)
-            s = out[:,0,:] + 1j*out[:,1,:]
-
-            # масштабируем
-            y_ar = self.d_s * s
-
-        else:
-            # 2) классическая AR через conv1d
-            # pad=(Dy,0) чтобы результат тоже длиной N
-            pad = (self.Dy, 0)
-            y_r_p = F.pad(y_real.view(1,1,N), pad)
-            y_i_p = F.pad(y_imag.view(1,1,N), pad)
-            # готовим ядра из d (переворачиваем, чтобы conv давал автоковариацию)
-            dr = self.d.real.flip(0).view(1,1,self.Dy)
-            di = self.d.imag.flip(0).view(1,1,self.Dy)
-            # комплексная свёртка: (a+jb)*(c+jd) = (ac - bd) + j(ad + bc)
-            ar_r = F.conv1d(y_r_p, dr) - F.conv1d(y_i_p, di)
-            ar_i = F.conv1d(y_r_p, di) + F.conv1d(y_i_p, dr)
-            y_ar = (ar_r + 1j * ar_i)[..., :N].view(N)
+        # размещение результата в полном массиве
+        y_ar = torch.zeros_like(y_gmp)
+        y_ar[self.Dy:] = y_ar_part[:-1]
 
         return y_ar
 
@@ -147,7 +118,7 @@ class NARX_FracDelays_GMP(GMP):
         # for bx in batch_x:
         #     y_total = y_total + self._sum_terms(bx, N, indices)
 
-        sum_terms_batch = vmap(lambda bx: self._sum_terms(bx, N, indices), in_dims=0, out_dims=0)
+        sum_terms_batch = vmap(lambda bx: self._compute_terms(bx), in_dims=0, out_dims=0)
         terms = sum_terms_batch(batch_x)
         y_total = y_gmp + terms.sum(dim=0)
 
