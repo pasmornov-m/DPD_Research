@@ -13,8 +13,8 @@ def optimize_dla_grad(input_data, target_data, dpd_model, pa_model, epochs=10000
     for epoch in range(epochs):
         optimizer.zero_grad()
 
-        dpd_output = dpd_model.compute_output(input_data)
-        pa_output = pa_model.compute_output(dpd_output)
+        dpd_output = dpd_model.forward(input_data)
+        pa_output = pa_model.forward(dpd_output)
 
         if add_noise:
             if snr is None or fs is None or bw is None:
@@ -37,7 +37,7 @@ def optimize_ila_grad(dpd_model, input_data, output_data, gain, epochs=100000, l
     
     if pa_model:
         print("Compute on pa_model")
-        output_data = (pa_model.compute_output(input_data) / gain).detach()
+        output_data = (pa_model.forward(input_data) / gain).detach()
     else:
         print("Compute on presaved output_data")
         output_data = to_torch_tensor(output_data) / gain
@@ -63,7 +63,7 @@ def ilc_signal_grad(input_data, target_data, pa_model, max_iterations=1000000, l
 
     for iteration in range(max_iterations):
         optimizer.zero_grad()
-        pa_output = pa_model.compute_output(u)
+        pa_output = pa_model.forward(u)
 
         if add_noise:
             if snr is None or fs is None or bw is None:
