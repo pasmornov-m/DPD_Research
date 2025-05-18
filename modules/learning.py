@@ -6,7 +6,7 @@ def optimize_dla_grad(input_data, target_data, dpd_model, pa_model, epochs=10000
                       add_noise=False, snr=None, fs=None, bw=None):
     input_data, target_data = map(to_torch_tensor, (input_data, target_data))
 
-    optimizer = torch.optim.AdamW(dpd_model.parameters(), lr=learning_rate, eps = 1e-16, betas=(0.9, 0.999), weight_decay=1e-5, amsgrad=True)
+    optimizer = torch.optim.Adam(dpd_model.parameters(), lr=learning_rate, amsgrad=True)
     for param in pa_model.parameters():
         param.requires_grad = False
             

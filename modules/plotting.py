@@ -15,8 +15,8 @@ def plot_signal_spectra(
     
     plt.figure(figsize=figsize)
 
-    for spectrum, color, label in spectra:
-        plt.plot(freqs / 1e6, 10 * np.log10(np.abs(spectrum)), color=color, label=label)
+    for spectrum, color, label, marker in spectra:
+        plt.plot(freqs / 1e6, 10 * np.log10(np.abs(spectrum)), color=color, label=label, marker=marker)
 
     plt.title(title, fontsize=fontsize)
     plt.xlabel(xlabel, fontsize=fontsize)

@@ -1,0 +1,6 @@
+# matlab==0.1
+matplotlib==3.10.3
+numpy==2.2.6
+polars==1.29.0
+scipy==1.15.3
+torch==2.6.0

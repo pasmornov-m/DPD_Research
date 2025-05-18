@@ -80,7 +80,7 @@ def compute_signal_power(signal):
 def power_spectrum(input_data, fs, nperseg):
     if isinstance(input_data, torch.Tensor):
         input_data = input_data.detach().cpu().numpy()
-    freqs, spectrum = welch(input_data, fs=fs, nperseg=nperseg)
+    _, spectrum = welch(input_data, fs=fs, nperseg=nperseg)
     freqs = np.fft.fftshift(np.fft.fftfreq(len(spectrum), d=1/fs))
     spectrum = np.fft.fftshift(spectrum)
     return freqs, spectrum
