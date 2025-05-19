@@ -17,8 +17,7 @@ class NARX_FracDelays_GMP(GMP):
         self.deltas = torch.nn.Parameter(0.5 * torch.ones(P_fd, dtype=torch.float))
         self.logit_alpha = torch.nn.Parameter(torch.logit(torch.tensor(0.9)))
         self.d_s = torch.nn.Parameter(torch.tensor(0.001, dtype=torch.float))
-
-        self.logit_weights = torch.nn.Parameter(torch.tensor([0.001, 0.001, 0.001]))
+        self.logit_weights = torch.nn.Parameter(torch.tensor([0.01, 0.01]))
 
         deltas_transform = self.deltas.view(-1, 1)
         kernels = torch.stack([1 - deltas_transform, deltas_transform], dim=1)
@@ -32,15 +31,12 @@ class NARX_FracDelays_GMP(GMP):
         return num_params
 
     def forward(self, x):
+        w_gmp, w_ar = torch.softmax(self.logit_weights, dim=0)
         y_gmp = super().forward(x)
-        y_frac = self._frac_delay(x, y_gmp)
+        # y_frac = self._frac_delay(x, y_gmp)
         y_ar = self._compute_autoregression(y_gmp)
 
-        weights = torch.softmax(self.logit_weights, dim=0)
-        w_gmp, w_frac, w_ar = weights
-        y = w_gmp * y_gmp + w_frac * y_frac + w_ar * y_ar
-
-        # y = y_gmp + y_frac + y_ar
+        y = w_gmp * y_gmp + w_ar * y_ar
 
         return y
 
@@ -83,15 +79,9 @@ class NARX_FracDelays_GMP(GMP):
         if N < self.Dy:
             raise ValueError(f"Для Dy={self.Dy} требуется хотя бы {self.Dy+1} отсчетов в y_gmp.")
 
-        # X_ar = torch.stack([y_gmp[self.Dy-j-1:N-j-1] for j in range(self.Dy)], dim=1)
-        # y_ar_part = X_ar @ self.d 
-        # y_ar = torch.zeros_like(y_gmp)
-        # y_ar[self.Dy:] = y_ar_part
-
         X_ar = y_gmp.unfold(0, self.Dy, 1)
         y_ar_part = X_ar @ self.d
 
-        # размещение результата в полном массиве
         y_ar = torch.zeros_like(y_gmp)
         y_ar[self.Dy:] = y_ar_part[:-1]
 
