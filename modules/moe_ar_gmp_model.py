@@ -1,0 +1,71 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from modules.gmp_model import GMP
+from modules.gmp_narx_model import GMP_NARX
+
+
+# class MoE_GMP_AR(nn.Module):
+#     def __init__(self, N, gmp_narx_kwargs):
+#         super().__init__()
+#         self.logits = nn.Parameter(torch.randn(N, dtype=torch.float32))
+#         self.experts = nn.ModuleList([
+#             GMP_NARX(**gmp_narx_kwargs) for _ in range(N)
+#         ])
+#     def forward(self, x):
+        
+#         ys = [expert(x) for expert in self.experts]
+
+#         ys = torch.stack(ys, dim=-1)
+
+#         alpha = F.softmax(self.logits, dim=0)
+
+
+#         if ys.dim() == 3:
+#             # батч
+#             alpha = alpha.view(1, 1, -1)
+#         y = (ys * alpha).sum(dim=-1)
+
+#         return y
+
+
+
+class MoE_GMP_AR(nn.Module):
+    def __init__(self, num_experts, gmp_narx_kwargs):
+        super().__init__()
+        self.experts = nn.ModuleList([
+            GMP_NARX(**gmp_narx_kwargs) for _ in range(num_experts)
+        ])
+
+        self.logits = nn.Parameter(torch.zeros(num_experts))
+        self.Dy = gmp_narx_kwargs['Dy']
+        self.d = torch.nn.Parameter(0.001 * torch.randn(self.Dy, dtype=torch.cfloat))
+        self.logit_weights = torch.nn.Parameter(torch.tensor([0.01, 0.01]))
+
+    def forward(self, x):
+        
+        weights = torch.softmax(self.logits, dim=0)
+
+        ys = [expert(x) for expert in self.experts]
+
+        y_stack = torch.stack(ys, dim=-1)
+        y_weighted = (y_stack * weights).mean(dim=-1)
+
+        w_gmp, w_ar = torch.softmax(self.logit_weights, dim=0)
+        y_ar = self._compute_autoregression(y_weighted)
+        y = w_gmp * y_weighted + w_ar * y_ar
+
+        return y
+    
+    def _compute_autoregression(self, y_gmp):
+        N = y_gmp.shape[0]
+        if N < self.Dy:
+            raise ValueError(f"Для Dy={self.Dy} требуется хотя бы {self.Dy+1} отсчетов в y_gmp.")
+
+        X_ar = y_gmp.unfold(0, self.Dy, 1)
+        y_ar_part = X_ar @ self.d
+
+        y_ar = torch.zeros_like(y_gmp)
+        y_ar[self.Dy:] = y_ar_part[:-1]
+
+        return y_ar

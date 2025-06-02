@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import os
 from modules.utils import to_torch_tensor, check_early_stopping
 from modules.metrics import compute_mse
@@ -6,12 +7,14 @@ from modules.gmp_model import GMP
 
 
 class GMP_NARX(GMP):
-    def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, Dy, model_type):
+    def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, Dy, model_type=None):
         super().__init__(Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, model_type)
         self.Dy = Dy
+        self.alpha = torch.nn.Parameter(0.001 * torch.randn(Dy))
 
         self.d = torch.nn.Parameter(0.001 * torch.randn(self.Dy, dtype=torch.cfloat))
         self.logit_weights = torch.nn.Parameter(torch.tensor([0.01, 0.01]))
+        self.ar_weights = torch.nn.Parameter(torch.tensor([0.01, 0.01]))
     
     def number_parameters(self):
         num_gmp = self.Ka * self.La + self.Kb * self.Lb * self.Mb + self.Kc * self.Lc * self.Mc
@@ -58,8 +61,7 @@ class GMP_NARX(GMP):
         else:
             print(f"No saved coefficients found at {filename}, initializing new parameters.")
             return False
-
-
+    
     def _compute_autoregression(self, y_gmp):
         N = y_gmp.shape[0]
         if N < self.Dy:

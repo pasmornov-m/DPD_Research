@@ -6,7 +6,7 @@ from modules.metrics import compute_mse
 
 
 class GMP(nn.Module):
-    def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, model_type):
+    def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, model_type=None):
         super().__init__()
         self.Ka, self.La = Ka, La
         self.Kb, self.Lb, self.Mb = Kb, Lb, Mb
