@@ -78,7 +78,7 @@ class GMP(nn.Module):
         indices_delayed_Lb = (indices_N - self.indices_Lb).clamp(min=0, max=N-1)
         indices_delayed_Lc = (indices_N - self.indices_Lc).clamp(min=0, max=N-1)
 
-        indices_delayed_Ma = (indices_delayed_La).clamp(min=0, max=N-1)
+        indices_delayed_Ma = indices_delayed_La
         indices_delayed_Mb = (indices_N.unsqueeze(1) - self.indices_Lb.unsqueeze(2) - self.indices_Mb).clamp(min=0, max=N-1)
         indices_delayed_Mc = (indices_N.unsqueeze(1) - self.indices_Lc.unsqueeze(2) + self.indices_Mc).clamp(min=0, max=N-1)
 
@@ -90,9 +90,9 @@ class GMP(nn.Module):
         x_truncated_2b = x[indices_delayed_Mb]
         x_truncated_2c = x[indices_delayed_Mc]
 
-        abs_powers_a = (torch.abs(x_truncated_2a).unsqueeze(-1) ** self.powers_Ka).type_as(x_truncated_1a)
-        abs_powers_b = (torch.abs(x_truncated_2b).unsqueeze(-1) ** self.powers_Kb).type_as(x_truncated_1b)
-        abs_powers_c = (torch.abs(x_truncated_2c).unsqueeze(-1) ** self.powers_Kc).type_as(x_truncated_1c)
+        abs_powers_a = (torch.abs(x_truncated_2a).unsqueeze(-1) ** self.powers_Ka).to(x.dtype)
+        abs_powers_b = (torch.abs(x_truncated_2b).unsqueeze(-1) ** self.powers_Kb).to(x.dtype)
+        abs_powers_c = (torch.abs(x_truncated_2c).unsqueeze(-1) ** self.powers_Kc).to(x.dtype)
 
         x_scaled_a = x_truncated_1a.unsqueeze(-1) * abs_powers_a
         x_scaled_b = x_truncated_1b.unsqueeze(1).unsqueeze(-1) * abs_powers_b
@@ -102,6 +102,6 @@ class GMP(nn.Module):
         term_b = torch.einsum('klm,lmnk->n', self.b, x_scaled_b)
         term_c = torch.einsum('klm,lmnk->n', self.c, x_scaled_c)
 
-        y = sum([term_a, term_b, term_c])
+        y = term_a + term_b + term_c
         
         return y

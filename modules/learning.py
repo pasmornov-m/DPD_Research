@@ -24,9 +24,9 @@ def optimize_dla_grad(input_data, target_data, dpd_model, pa_model, epochs=10000
         loss = compute_mse(pa_output, target_data)
         loss.backward()
         optimizer.step()
-        current_loss = loss.item()
 
-        print(f"Epoch [{epoch + 1}/{epochs}], Loss: {current_loss}")
+        if epoch%100==0:
+                print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
 
     print("DLA optimization completed.")
 

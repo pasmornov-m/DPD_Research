@@ -1,15 +1,25 @@
 import torch
+from torch.nn import MSELoss
 import numpy as np
 from scipy.signal import welch
 import matlab
-import matlab.engine
 from modules.utils import to_torch_tensor
+from scipy.signal import welch, get_window, lfilter
 
 
-def compute_mse(prediction, ground_truth):
-    prediction, ground_truth = map(to_torch_tensor, (prediction, ground_truth))
-    mse = ((ground_truth.real - prediction.real) ** 2 + (ground_truth.imag - prediction.imag) ** 2).mean()
-    return mse
+def compute_mse(x, y):
+    if torch.is_complex(x):
+        x = torch.view_as_real(x)
+    if torch.is_complex(y):
+        y = torch.view_as_real(y)
+
+    if x.shape != y.shape:
+        raise ValueError(f"Формы входов не совпадают: x {x.shape}, y {y.shape}")
+    if x.shape[-1] != 2:
+        raise ValueError("Ожидается последний размер = 2 (I, Q)")
+
+    mse = MSELoss()
+    return mse(x, y)
 
 
 def compute_nmse(prediction, ground_truth):
@@ -86,12 +96,180 @@ def power_spectrum(input_data, fs, nperseg):
     return freqs, spectrum
 
 
+# def calculate_acpr(eng, input_data, fs, bw_main_ch, nperseg):
+#     signal_numpy = input_data.numpy()
+#     signal_matlab = matlab.double(np.column_stack((signal_numpy.real, signal_numpy.imag)).tolist())
+#     result = eng.compute_acpr(signal_matlab, fs, bw_main_ch, nperseg, nargout=1)
+#     acpr_left, acpr_right = float(result[0][0]), float(result[0][1])
+#     return acpr_left, acpr_right
+
+
+class ACPR:
+    def __init__(
+        self,
+        sample_rate: float,
+        main_channel_frequency: float = 0.0,
+        main_measurement_bandwidth: float = 50e3,
+        adjacent_channel_offset: np.ndarray = np.array([-100e3, 100e3]),
+        adjacent_measurement_bandwidth: np.ndarray = None,
+        measurement_filter_source: str = 'None',   # 'None' или 'Property'
+        measurement_filter: np.ndarray = np.array([1.0]),  # FIR-коэффициенты
+        spectral_estimation: str = 'welch',  # только 'welch' сейчас
+        segment_length: int = 2560,
+        overlap_percentage: float = 60.0,
+        window: str = 'blackmanharris',
+        fft_length: int = None,              # None → равно segment_length
+        power_units: str = 'dBW',            # 'Watts', 'dBW', 'dBm'
+        return_main_power: bool = False,
+        return_adjacent_powers: bool = False,
+    ):
+        # Валидация
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be > 0")
+        self.fs = float(sample_rate)
+
+        self.fc0 = float(main_channel_frequency)
+        if main_measurement_bandwidth <= 0:
+            raise ValueError("main_measurement_bandwidth must be > 0")
+        self.bw0 = float(main_measurement_bandwidth)
+
+        self.offsets = np.atleast_1d(adjacent_channel_offset).astype(float)
+        # Если не задано, берём те же bw для всех смещений
+        if adjacent_measurement_bandwidth is None:
+            self.bw_adj = np.full_like(self.offsets, self.bw0)
+        else:
+            self.bw_adj = np.atleast_1d(adjacent_measurement_bandwidth).astype(float)
+            if self.bw_adj.shape not in ((len(self.offsets),), ()):
+                raise ValueError("adjacent_measurement_bandwidth must be scalar or same length as offsets")
+
+        # Фильтр
+        self.filter_source = measurement_filter_source
+        if self.filter_source not in ('None', 'Property'):
+            raise ValueError("measurement_filter_source must be 'None' or 'Property'")
+        self.fir = np.atleast_1d(measurement_filter).astype(float)
+
+        if spectral_estimation.lower() != 'welch':
+            raise NotImplementedError("Only 'welch' spectral_estimation is supported")
+        self.method = 'welch'
+
+        if segment_length <= 0 or not isinstance(segment_length, int):
+            raise ValueError("segment_length must be positive integer")
+        self.nperseg = segment_length
+
+        if not (0 <= overlap_percentage < 100):
+            raise ValueError("overlap_percentage must be in [0,100)")
+        self.noverlap = int(self.nperseg * overlap_percentage / 100)
+
+        self.window = window
+        self.nfft = fft_length or self.nperseg
+
+        if power_units not in ('Watts', 'dBW', 'dBm'):
+            raise ValueError("power_units must be one of 'Watts', 'dBW', 'dBm'")
+        self.power_units = power_units
+
+        self.return_main = return_main_power
+        self.return_adj = return_adjacent_powers
+
+    def __call__(self, signal):
+        """
+        signal: 1D array-like of complex samples (numpy or torch)
+        returns: ACPR (and, опционально, main power, adjacent powers)
+        """
+        # 1) Приведение к numpy-комплексному вектору
+        if isinstance(signal, torch.Tensor):
+            signal = signal.detach().cpu().numpy()
+        signal = np.asarray(signal)
+        if signal.ndim != 1 or not np.iscomplexobj(signal):
+            raise ValueError("signal must be 1D complex array")
+
+        # 2) Опциональный FIR-фильтр
+        if self.filter_source == 'Property':
+            signal = lfilter(self.fir, [1.0], signal)
+
+        # 3) PSD оценка via Welch (двухсторонний)
+        win = get_window(self.window, self.nperseg)
+        freqs, psd = welch(
+            signal,
+            fs=self.fs,
+            window=win,
+            nperseg=self.nperseg,
+            noverlap=self.noverlap,
+            nfft=self.nfft,
+            return_onesided=False,
+            scaling='density'
+        )
+        # shift zero-freq to center
+        psd = np.fft.fftshift(psd)
+        freqs = np.fft.fftshift(freqs)
+
+        # 4) Вычисляем мощности в каждой полосе
+        df = freqs[1] - freqs[0]
+        # Основная полоса
+        low0 = self.fc0 - self.bw0/2
+        high0 = self.fc0 + self.bw0/2
+        mask0 = (freqs >= low0) & (freqs <= high0)
+        P0 = np.sum(psd[mask0]) * df
+
+        # Соседние
+        Pacpr = []
+        Padj = []
+        for offset, bw in zip(self.offsets, self.bw_adj):
+            low = self.fc0 + offset - bw/2
+            high = self.fc0 + offset + bw/2
+            m = (freqs >= low) & (freqs <= high)
+            P = np.sum(psd[m]) * df
+            Pacpr.append(P)
+            Padj.append(P)
+
+        # 5) Отношение ACPR
+        # Формула: (MainBW / AdjBW) * (Padj / P0)
+        ACPR_vals = (self.bw0 / self.bw_adj) * (np.array(Pacpr) / P0)
+
+        # 6) Преобразование единиц
+        if self.power_units == 'Watts':
+            acpr_out = ACPR_vals
+            main_p = P0
+            adj_p = np.array(Padj)
+        else:
+            # в дБ
+            acpr_out = 10 * np.log10(ACPR_vals)
+            main_p = 10 * np.log10(P0)
+            if self.power_units == 'dBm':
+                main_p += 30
+            adj_p = 10 * np.log10(Padj)
+            if self.power_units == 'dBm':
+                adj_p = adj_p + 30
+
+        # collcect output
+        out = [acpr_out]
+        if self.return_main:
+            out.append(main_p)
+        if self.return_adj:
+            out.append(adj_p)
+
+        return tuple(out) if len(out) > 1 else acpr_out
+
+
 def calculate_acpr(eng, input_data, fs, bw_main_ch, nperseg):
-    signal_numpy = input_data.numpy()
-    signal_matlab = matlab.double(np.column_stack((signal_numpy.real, signal_numpy.imag)).tolist())
-    result = eng.compute_acpr(signal_matlab, fs, bw_main_ch, nperseg, nargout=1)
-    acpr_left, acpr_right = float(result[0][0]), float(result[0][1])
-    return acpr_left, acpr_right
+
+    sub_ch = 300e6
+
+    acpr = ACPR(
+        sample_rate=fs,
+        main_measurement_bandwidth=bw_main_ch,
+        adjacent_channel_offset=np.array([-sub_ch, sub_ch]),
+        segment_length=nperseg,
+        overlap_percentage=60,
+        window='blackmanharris',
+        fft_length=nperseg,
+        power_units='dBW',
+        return_main_power=True,
+        return_adjacent_powers=True
+    )
+
+    acpr_vals, main_pw, adj_pw = acpr(input_data)
+
+    return acpr_vals
 
 
 def add_complex_noise(signal, snr, fs, bw):
