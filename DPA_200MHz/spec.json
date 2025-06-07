@@ -3,5 +3,6 @@
     "bw_main_ch": 200e6,
     "bw_sub_ch": 20e6,
     "n_sub_ch": 10,
-    "nperseg": 2560
+    "nperseg": 2560,
+    "sub_ch": 200e6
 }

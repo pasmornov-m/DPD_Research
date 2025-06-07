@@ -25,7 +25,7 @@ def optimize_dla_grad(input_data, target_data, dpd_model, pa_model, epochs=10000
         loss.backward()
         optimizer.step()
 
-        if epoch%100==0:
+        if epoch%99==0:
                 print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
 
     print("DLA optimization completed.")
@@ -40,19 +40,27 @@ def optimize_ila_grad(dpd_model, input_data, output_data, gain, epochs=100000, l
         output_data = (pa_model.forward(input_data) / gain).detach()
     else:
         print("Compute on presaved output_data")
-        output_data = to_torch_tensor(output_data) / gain
+        output_data = to_torch_tensor(output_data) / gain    
 
-    if add_noise:
-        if snr is None or fs is None or bw is None:
-            raise ValueError("SNR, fs, and bw must be provided when add_noise=True")
-        output_data = add_complex_noise(output_data, snr, fs, bw)
+    optimizer = torch.optim.Adam(dpd_model.parameters(), lr=learning_rate, amsgrad=True)
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        output = dpd_model.forward(output_data)
+        if add_noise:
+            if snr is None or fs is None or bw is None:
+                raise ValueError("SNR, fs, and bw must be provided when add_noise=True")
+            output = add_complex_noise(output, snr, fs, bw)
+        loss = compute_mse(output, input_data)
+        loss.backward()
+        optimizer.step()
 
-    dpd_model.optimize_coefficients_grad(output_data, input_data, epochs, learning_rate)
-    
+        if epoch%99==0:
+            print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
+
     print("ILA-DPD Training Complete.")
 
 
-def ilc_signal_grad(input_data, target_data, pa_model, max_iterations=1000000, learning_rate=0.1, 
+def ilc_signal_grad(input_data, target_data, pa_model, epochs=1000000, learning_rate=0.1, 
                     add_noise=False, snr=None, fs=None, bw=None):
     input_data, target_data = map(to_torch_tensor, (input_data, target_data))
     u = torch.nn.Parameter(input_data.clone(), requires_grad=True)
@@ -61,7 +69,7 @@ def ilc_signal_grad(input_data, target_data, pa_model, max_iterations=1000000, l
     for param in pa_model.parameters():
         param.requires_grad = False
 
-    for iteration in range(max_iterations):
+    for epoch in range(epochs):
         optimizer.zero_grad()
         pa_output = pa_model.forward(u)
 
@@ -74,7 +82,8 @@ def ilc_signal_grad(input_data, target_data, pa_model, max_iterations=1000000, l
         loss.backward()
         optimizer.step()
 
-        print(f"Iteration {iteration + 1}/{max_iterations}, Loss: {loss}")
+        if epoch%99==0:
+            print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
 
     return u.detach()
 

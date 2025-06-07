@@ -1,12 +1,11 @@
 import torch
-import torch.nn.functional as F
 import os
 from modules.utils import to_torch_tensor, check_early_stopping
 from modules.metrics import compute_mse
 from modules.gmp_model import GMP
 
 
-class GMP_NARX(GMP):
+class GMP_AR(GMP):
     def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, Dy, model_type=None):
         super().__init__(Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, model_type)
         self.Dy = Dy
@@ -39,7 +38,7 @@ class GMP_NARX(GMP):
             loss.backward()
             optimizer.step()
             
-            if epoch%100==0:
+            if epoch%99==0:
                 print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
     
 

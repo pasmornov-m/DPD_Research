@@ -2,39 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from modules.gmp_model import GMP
-from modules.gmp_narx_model import GMP_NARX
-
-
-# class MoE_GMP_AR(nn.Module):
-#     def __init__(self, N, gmp_narx_kwargs):
-#         super().__init__()
-#         self.logits = nn.Parameter(torch.randn(N, dtype=torch.float32))
-#         self.experts = nn.ModuleList([
-#             GMP_NARX(**gmp_narx_kwargs) for _ in range(N)
-#         ])
-#     def forward(self, x):
-        
-#         ys = [expert(x) for expert in self.experts]
-
-#         ys = torch.stack(ys, dim=-1)
-
-#         alpha = F.softmax(self.logits, dim=0)
-
-
-#         if ys.dim() == 3:
-#             # батч
-#             alpha = alpha.view(1, 1, -1)
-#         y = (ys * alpha).sum(dim=-1)
-
-#         return y
-
-
+from modules.gmp_ar_model import GMP_AR
 
 class MoE_GMP_AR(nn.Module):
     def __init__(self, num_experts, gmp_narx_kwargs):
         super().__init__()
         self.experts = nn.ModuleList([
-            GMP_NARX(**gmp_narx_kwargs) for _ in range(num_experts)
+            GMP_AR(**gmp_narx_kwargs) for _ in range(num_experts)
         ])
 
         self.logits = nn.Parameter(torch.zeros(num_experts))

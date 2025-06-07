@@ -5,11 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-import matlab.engine
 from modules import data_loader, metrics, learning
 from modules.gmp_model import GMP
-from modules.gmp_narx_model import GMP_NARX
-from modules.moe_ar_gmp_model import MoE_GMP_AR
 
 # ----------------------------
 # 1. Описание состояний FSM
@@ -52,15 +49,18 @@ class AmplifierDPDFSM:
         self.state = FSMState.INIT
         self.data_path = data_path
 
-        # MATLAB engine и данные
-        self.eng = None
+        # данные
         self.data = None
         self.config = None
         self.fs = None
         self.bw_main_ch = None
         self.bw_sub_ch = None
         self.n_sub_ch = None
+        self.sub_ch = None
         self.nperseg = None
+
+        # ACPR meter
+        self.acpr_meter = None
 
         # Тренировочные/валидационные сигналы
         self.x_train = None
@@ -77,7 +77,6 @@ class AmplifierDPDFSM:
         self.pa_model_type = None
         self.pa_params = {}
         self.pa_model = None
-        self.y_gmp_pa = None
         self.nmse_pa = None
 
         # DPD
@@ -149,17 +148,17 @@ class AmplifierDPDFSM:
 
     def _init(self):
         """INIT → ESTIMATE_GAIN."""
-        print(">> STATE: INIT — запуск MATLAB и загрузка данных …")
-        self.eng = matlab.engine.start_matlab()
+        print(">> STATE: INIT — загрузка данных …")
 
-        # Загрузим данные
+        # Загрузка данные
         self.data = data_loader.load_data(self.data_path)
         self.config = self.data["config"]
         self.fs = self.config["input_signal_fs"]
         self.bw_main_ch = self.config["bw_main_ch"]
         self.bw_sub_ch = self.config["bw_sub_ch"]
         self.n_sub_ch = self.config["n_sub_ch"]
-        self.nperseg = float(self.config["nperseg"])
+        self.sub_ch = self.config["sub_ch"]
+        self.nperseg = self.config["nperseg"]
 
         self.snr = None
 
@@ -167,6 +166,19 @@ class AmplifierDPDFSM:
         self.y_train = self.data["train_output"]
         self.x_val = self.data["val_input"]
         self.y_val = self.data["val_output"]
+
+        self.acpr_meter = metrics.ACPR(
+            sample_rate=self.fs,
+            main_measurement_bandwidth=self.bw_main_ch,
+            adjacent_channel_offset=[-self.sub_ch, self.sub_ch],
+            segment_length=self.nperseg,
+            overlap_percentage=60,
+            window='blackmanharris',
+            fft_length=self.nperseg,
+            power_units='dBW',
+            return_main_power=True,
+            return_adjacent_powers=True
+        )
 
         # Переход
         self.state = FSMState.ESTIMATE_GAIN
@@ -188,7 +200,7 @@ class AmplifierDPDFSM:
         print(">> STATE: SELECT_PA_MODEL_TYPE — выбираем модель PA …")
         # Читаем из GUI
         chosen = self.gui.pa_model_choice.get()
-        if chosen not in ["GMP", "GMP_NARX", "MoE_GMP_AR"]:
+        if chosen not in ["GMP"]:
             messagebox.showwarning("Выбор PA", "Пожалуйста, выберите модель PA.")
             return
         self.pa_model_type = chosen
@@ -232,10 +244,6 @@ class AmplifierDPDFSM:
         # Выбираем класс PA
         if self.pa_model_type == "GMP":
             self.pa_model = GMP(p["Ka"], p["La"], p["Kb"], p["Lb"], p["Mb"], p["Kc"], p["Lc"], p["Mc"], model_type="pa_grad")
-        elif self.pa_model_type == "GMP_NARX":
-            self.pa_model = GMP_NARX(p["Ka"], p["La"], p["Kb"], p["Lb"], p["Mb"], p["Kc"], p["Lc"], p["Mc"], model_type="pa_grad")
-        else:  # "MoE_GMP_AR"
-            self.pa_model = MoE_GMP_AR(p["Ka"], p["La"], p["Kb"], p["Lb"], p["Mb"], p["Kc"], p["Lc"], p["Mc"], model_type="pa_grad")
 
         # Попытка загрузить
         if not self.pa_model.load_coefficients():
@@ -250,8 +258,8 @@ class AmplifierDPDFSM:
             self.pa_model.save_coefficients()
 
         # Прогоняем PA на валидации
-        self.y_gmp_pa = self.pa_model.forward(self.x_val).detach()
-        self.nmse_pa = metrics.compute_nmse(self.y_gmp_pa, self.y_val)
+        y_pa = self.pa_model.forward(self.x_val).detach()
+        self.nmse_pa = metrics.compute_nmse(y_pa, self.y_val)
         print(f"   • NMSE_PA = {self.nmse_pa:.2f} dB")
 
         self.state = FSMState.PLOT_PA_SPECTRUM
@@ -260,8 +268,9 @@ class AmplifierDPDFSM:
     def _plot_pa_spectrum(self):
         """PLOT_PA_SPECTRUM → SELECT_DPD_MODEL_TYPE."""
         print(">> STATE: PLOT_PA_SPECTRUM — строим спектры PA …")
+        y_pa = self.pa_model.forward(self.x_val).detach()
         freqs, spec_in = metrics.power_spectrum(self.y_val, self.fs, self.nperseg)
-        _, spec_pa = metrics.power_spectrum(self.y_gmp_pa, self.fs, self.nperseg)
+        _, spec_pa = metrics.power_spectrum(y_pa, self.fs, self.nperseg)
 
         plt.figure(figsize=(8,4))
         plt.plot(freqs/1e6, 10*np.log10(np.abs(spec_in)), 'grey', label='y_val (input)')
@@ -280,7 +289,7 @@ class AmplifierDPDFSM:
         """SELECT_DPD_MODEL_TYPE → CONFIGURE_DPD_MODEL."""
         print(">> STATE: SELECT_DPD_MODEL_TYPE — выбираем модель DPD …")
         chosen = self.gui.dpd_model_choice.get()
-        if chosen not in ["GMP", "GMP_NARX", "MoE_GMP_AR"]:
+        if chosen not in ["GMP"]:
             messagebox.showwarning("Выбор DPD", "Пожалуйста, выберите модель DPD.")
             return
         self.dpd_model_type = chosen
@@ -351,10 +360,6 @@ class AmplifierDPDFSM:
         # Выбор класса DPD
         if self.dpd_model_type == "GMP":
             dpd = GMP(p["Ka"], p["La"], p["Kb"], p["Lb"], p["Mb"], p["Kc"], p["Lc"], p["Mc"], model_type=f"dpd_{arch.lower()}_grad")
-        elif self.dpd_model_type == "GMP_NARX":
-            dpd = GMP_NARX(p["Ka"], p["La"], p["Kb"], p["Lb"], p["Mb"], p["Kc"], p["Lc"], p["Mc"], model_type=f"dpd_{arch.lower()}_grad")
-        else:  # "MoE_GMP_AR"
-            dpd = MoE_GMP_AR(p["Ka"], p["La"], p["Kb"], p["Lb"], p["Mb"], p["Kc"], p["Lc"], p["Mc"], model_type=f"dpd_{arch.lower()}_grad")
 
         need_train = True
 
@@ -391,7 +396,7 @@ class AmplifierDPDFSM:
         y_dpd = dpd.forward(self.x_val).detach()
         y_lin = self.pa_model.forward(y_dpd).detach()
         nmse_dpd = metrics.compute_nmse(y_lin, self.y_val_target)
-        acpr_l, acpr_r = metrics.calculate_acpr(self.eng, y_lin, self.fs, self.bw_main_ch, self.nperseg)
+        acpr_l, acpr_r = metrics.calculate_acpr(y_lin, self.acpr_meter)
         
         self.results_no_noise[arch] = {
             "nmse": nmse_dpd,
@@ -419,8 +424,9 @@ class AmplifierDPDFSM:
     def _plot_dpd_spectrum(self):
         """PLOT_DPD_SPECTRUM → SELECT_NOISE_RANGE."""
         print(">> STATE: PLOT_DPD_SPECTRUM — строим спектры DPD …")
+        y_pa = self.pa_model.forward(self.x_val).detach()
         freqs, spec_in = metrics.power_spectrum(self.x_val, self.fs, self.nperseg)
-        _, spec_pa = metrics.power_spectrum(self.y_gmp_pa, self.fs, self.nperseg)
+        _, spec_pa = metrics.power_spectrum(y_pa, self.fs, self.nperseg)
 
         plt.figure(figsize=(10,6))
         plt.plot(freqs/1e6, 10*np.log10(np.abs(spec_in)), 'grey', label='x_val (input)')
@@ -494,8 +500,8 @@ class AmplifierDPDFSM:
                         )
                         y_pa = self.pa_model.forward(dpd_noisy.forward(self.x_val)).detach()
                         nm_cur, left, right = metrics.noise_realizations(
-                            self.num_realizations, self.eng, y_pa, self.y_val_target,
-                            snr, self.fs, self.bw_main_ch, self.nperseg
+                            self.num_realizations, y_pa, self.y_val_target,
+                            snr, self.fs, self.bw_main_ch, self.acpr_meter
                         )
 
                     elif arch == "ILA":
@@ -509,7 +515,7 @@ class AmplifierDPDFSM:
                         )
                         y_pa = self.pa_model.forward(dpd_noisy.forward(self.x_val)).detach()
                         nm_cur = metrics.compute_nmse(y_pa, self.y_val_target)
-                        left, right = metrics.calculate_acpr(self.eng, y_pa, self.fs, self.bw_main_ch, self.nperseg)
+                        left, right = metrics.calculate_acpr(y_pa, self.acpr_meter)
 
                     elif arch == "ILC":
                         Ka = La = Kb = Lb = Mb = Kc = Lc = Mc = 3
@@ -522,8 +528,8 @@ class AmplifierDPDFSM:
                         )
                         u_k_pa = self.pa_model.forward(u_k_noisy).detach()
                         nm_cur, left, right = metrics.noise_realizations(
-                            self.num_realizations, self.eng, u_k_pa, self.y_val_target,
-                            snr, self.fs, self.bw_main_ch, self.nperseg
+                            self.num_realizations, u_k_pa, self.y_val_target,
+                            snr, self.fs, self.bw_main_ch, self.acpr_meter
                         )
                         dpd_noisy.optimize_coefficients_grad(
                             self.x_train, u_k_noisy, 
@@ -531,8 +537,8 @@ class AmplifierDPDFSM:
                             learning_rate=self.dpd_params["lr"])
                         y_pa = self.pa_model.forward(dpd_noisy.forward(self.x_val)).detach()
                         nm_cur, left, right = metrics.noise_realizations(
-                            self.num_realizations, self.eng, y_pa, self.y_val_target,
-                            snr, self.fs, self.bw_main_ch, self.nperseg
+                            self.num_realizations, y_pa, self.y_val_target,
+                            snr, self.fs, self.bw_main_ch, self.acpr_meter
                         )
 
 
@@ -598,8 +604,6 @@ class AmplifierDPDFSM:
     def _done(self):
         """DONE: закрытие MATLAB и финальный вывод."""
         print(">> STATE: DONE — завершаем работу FSM.")
-        if self.eng is not None:
-            self.eng.quit()
         messagebox.showinfo("Finished", "Все этапы FSM выполнены успешно.")
         # В качестве «финального» состояния можно что-то ещё сделать в GUI (отключить кнопки, и т.п.)
 
@@ -624,89 +628,60 @@ class FSMGUI(tk.Tk):
         frame_pa = ttk.LabelFrame(self, text="1. Модель PA и параметры", padding=10)
         frame_pa.pack(fill="x", padx=10, pady=5)
 
-        ttk.Label(frame_pa, text="Выберите модель PA:").grid(row=0, column=0, sticky="w")
-        self.pa_model_choice = ttk.Combobox(frame_pa, values=["GMP", "GMP_NARX", "MoE_GMP_AR"], state="readonly")
+        # выбор модели PA
+        ttk.Label(frame_pa, text="Модель PA:").grid(row=0, column=0, sticky="w")
+        self.pa_model_choice = ttk.Combobox(frame_pa, values=["GMP"], state="readonly")
         self.pa_model_choice.grid(row=0, column=1, padx=5, pady=2)
 
-        # Порядки PA: Ka, La, Kb, Lb, Mb, Kc, Lc, Mc
-        ttk.Label(frame_pa, text="Ka:").grid(row=1, column=0, sticky="e")
-        self.pa_Ka_entry = ttk.Entry(frame_pa, width=5)
-        self.pa_Ka_entry.grid(row=1, column=1, sticky="w", padx=2)
-        ttk.Label(frame_pa, text="La:").grid(row=1, column=2, sticky="e")
-        self.pa_La_entry = ttk.Entry(frame_pa, width=5)
-        self.pa_La_entry.grid(row=1, column=3, sticky="w", padx=2)
+        # колонки для порядков
+        labels = [
+            ("Ka", "La"),
+            ("Kb", "Mb", "Lb"),
+            ("Kc", "Mc", "Lc"),
+        ]
+        self.pa_entries = {}  # чтобы потом удобнее читать
+        for col, group in enumerate(labels):
+            for row, name in enumerate(group):
+                ttk.Label(frame_pa, text=f"{name}:").grid(row=row, column=(col+1)*2, sticky="e", padx=2, pady=2)
+                entry = ttk.Entry(frame_pa, width=5)
+                entry.grid(row=row, column=(col+1)*2+1, sticky="w", padx=2, pady=2)
+                self.pa_entries[name] = entry
 
-        ttk.Label(frame_pa, text="Kb:").grid(row=1, column=4, sticky="e")
-        self.pa_Kb_entry = ttk.Entry(frame_pa, width=5)
-        self.pa_Kb_entry.grid(row=1, column=5, sticky="w", padx=2)
-        ttk.Label(frame_pa, text="Lb:").grid(row=1, column=6, sticky="e")
-        self.pa_Lb_entry = ttk.Entry(frame_pa, width=5)
-        self.pa_Lb_entry.grid(row=1, column=7, sticky="w", padx=2)
-
-        ttk.Label(frame_pa, text="Mb:").grid(row=2, column=0, sticky="e")
-        self.pa_Mb_entry = ttk.Entry(frame_pa, width=5)
-        self.pa_Mb_entry.grid(row=2, column=1, sticky="w", padx=2)
-        ttk.Label(frame_pa, text="Kc:").grid(row=2, column=2, sticky="e")
-        self.pa_Kc_entry = ttk.Entry(frame_pa, width=5)
-        self.pa_Kc_entry.grid(row=2, column=3, sticky="w", padx=2)
-
-        ttk.Label(frame_pa, text="Lc:").grid(row=2, column=4, sticky="e")
-        self.pa_Lc_entry = ttk.Entry(frame_pa, width=5)
-        self.pa_Lc_entry.grid(row=2, column=5, sticky="w", padx=2)
-        ttk.Label(frame_pa, text="Mc:").grid(row=2, column=6, sticky="e")
-        self.pa_Mc_entry = ttk.Entry(frame_pa, width=5)
-        self.pa_Mc_entry.grid(row=2, column=7, sticky="w", padx=2)
-
-        ttk.Label(frame_pa, text="Эпохи PA:").grid(row=3, column=0, sticky="e", pady=4)
+        # Эпохи и LR PA — внизу, под всеми группами
+        ttk.Label(frame_pa, text="").grid(row=4, column=0, pady=5)
+        ttk.Label(frame_pa, text="Эпохи PA:").grid(row=5, column=2, sticky="e", pady=4)
         self.pa_epochs_entry = ttk.Entry(frame_pa, width=7)
-        self.pa_epochs_entry.grid(row=3, column=1, sticky="w", padx=2)
-        ttk.Label(frame_pa, text="Скорость обучения PA:").grid(row=3, column=2, sticky="e", pady=4)
+        self.pa_epochs_entry.grid(row=5, column=3, sticky="w", padx=2)
+        ttk.Label(frame_pa, text="LR PA:").grid(row=5, column=4, sticky="e", pady=4)
         self.pa_lr_entry = ttk.Entry(frame_pa, width=7)
-        self.pa_lr_entry.grid(row=3, column=3, sticky="w", padx=2)
+        self.pa_lr_entry.grid(row=5, column=5, sticky="w", padx=2)
 
         # 2) Параметры модели DPD
         frame_dpd = ttk.LabelFrame(self, text="2. Модель DPD и параметры", padding=10)
         frame_dpd.pack(fill="x", padx=10, pady=5)
 
-        ttk.Label(frame_dpd, text="Выберите модель DPD:").grid(row=0, column=0, sticky="w")
-        self.dpd_model_choice = ttk.Combobox(frame_dpd, values=["GMP", "GMP_NARX", "MoE_GMP_AR"], state="readonly")
+        # выбор модели DPD
+        ttk.Label(frame_dpd, text="Модель DPD:").grid(row=0, column=0, sticky="w")
+        self.dpd_model_choice = ttk.Combobox(frame_dpd, values=["GMP"], state="readonly")
         self.dpd_model_choice.grid(row=0, column=1, padx=5, pady=2)
 
-        # Порядки DPD: Ka, La, Kb, Lb, Mb, Kc, Lc, Mc
-        ttk.Label(frame_dpd, text="Ka:").grid(row=1, column=0, sticky="e")
-        self.dpd_Ka_entry = ttk.Entry(frame_dpd, width=5)
-        self.dpd_Ka_entry.grid(row=1, column=1, sticky="w", padx=2)
-        ttk.Label(frame_dpd, text="La:").grid(row=1, column=2, sticky="e")
-        self.dpd_La_entry = ttk.Entry(frame_dpd, width=5)
-        self.dpd_La_entry.grid(row=1, column=3, sticky="w", padx=2)
+        # точно такие же группы колонок для DPD:
+        self.dpd_entries = {}
+        for col, group in enumerate(labels):
+            for row, name in enumerate(group):
+                ttk.Label(frame_dpd, text=f"{name}:").grid(row=row, column=(col+1)*2, sticky="e", padx=2, pady=2)
+                entry = ttk.Entry(frame_dpd, width=5)
+                entry.grid(row=row, column=(col+1)*2+1, sticky="w", padx=2, pady=2)
+                self.dpd_entries[name] = entry
 
-        ttk.Label(frame_dpd, text="Kb:").grid(row=1, column=4, sticky="e")
-        self.dpd_Kb_entry = ttk.Entry(frame_dpd, width=5)
-        self.dpd_Kb_entry.grid(row=1, column=5, sticky="w", padx=2)
-        ttk.Label(frame_dpd, text="Lb:").grid(row=1, column=6, sticky="e")
-        self.dpd_Lb_entry = ttk.Entry(frame_dpd, width=5)
-        self.dpd_Lb_entry.grid(row=1, column=7, sticky="w", padx=2)
-
-        ttk.Label(frame_dpd, text="Mb:").grid(row=2, column=0, sticky="e")
-        self.dpd_Mb_entry = ttk.Entry(frame_dpd, width=5)
-        self.dpd_Mb_entry.grid(row=2, column=1, sticky="w", padx=2)
-        ttk.Label(frame_dpd, text="Kc:").grid(row=2, column=2, sticky="e")
-        self.dpd_Kc_entry = ttk.Entry(frame_dpd, width=5)
-        self.dpd_Kc_entry.grid(row=2, column=3, sticky="w", padx=2)
-
-        ttk.Label(frame_dpd, text="Lc:").grid(row=2, column=4, sticky="e")
-        self.dpd_Lc_entry = ttk.Entry(frame_dpd, width=5)
-        self.dpd_Lc_entry.grid(row=2, column=5, sticky="w", padx=2)
-        ttk.Label(frame_dpd, text="Mc:").grid(row=2, column=6, sticky="e")
-        self.dpd_Mc_entry = ttk.Entry(frame_dpd, width=5)
-        self.dpd_Mc_entry.grid(row=2, column=7, sticky="w", padx=2)
-
-        ttk.Label(frame_dpd, text="Эпохи DPD:").grid(row=3, column=0, sticky="e", pady=4)
+        # Эпохи и LR DPD
+        ttk.Label(frame_dpd, text="").grid(row=4, column=0, pady=5)
+        ttk.Label(frame_dpd, text="Эпохи DPD:").grid(row=5, column=2, sticky="e", pady=4)
         self.dpd_epochs_entry = ttk.Entry(frame_dpd, width=7)
-        self.dpd_epochs_entry.grid(row=3, column=1, sticky="w", padx=2)
-        ttk.Label(frame_dpd, text="Скорость обучения DPD:").grid(row=3, column=2, sticky="e", pady=4)
+        self.dpd_epochs_entry.grid(row=5, column=3, sticky="w", padx=2)
+        ttk.Label(frame_dpd, text="LR DPD:").grid(row=5, column=4, sticky="e", pady=4)
         self.dpd_lr_entry = ttk.Entry(frame_dpd, width=7)
-        self.dpd_lr_entry.grid(row=3, column=3, sticky="w", padx=2)
+        self.dpd_lr_entry.grid(row=5, column=5, sticky="w", padx=2)
 
         # 3) Выбор архитектур DPD
         frame_arch = ttk.LabelFrame(self, text="3. Выбор DPD-архитектур", padding=10)
@@ -781,7 +756,7 @@ class FSMGUI(tk.Tk):
 
         pa_model_type = self.pa_model_choice.get()
         dpd_model_type = self.dpd_model_choice.get()
-        if pa_model_type not in ["GMP", "GMP_NARX", "MoE_GMP_AR"] or dpd_model_type not in ["GMP", "GMP_NARX", "MoE_GMP_AR"]:
+        if pa_model_type not in ["GMP"] or dpd_model_type not in ["GMP"]:
             messagebox.showwarning("Модели", "Выберите модели PA и DPD.")
             return
 
@@ -823,9 +798,6 @@ class FSMGUI(tk.Tk):
             messagebox.showerror("FSM Transition Error", str(e))
     
     def reset_fsm(self):
-        # Завершаем MATLAB-движок, если он запущен
-        if self.fsm.matlab_eng is not None:
-            self.fsm.matlab_eng.quit()
 
         # Создаём новый экземпляр FSM с теми же параметрами
         self.fsm = AmplifierDPDFSM(
