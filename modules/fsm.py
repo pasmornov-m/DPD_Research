@@ -3,6 +3,7 @@ import logging
 import threading
 import numpy as np
 import matplotlib.pyplot as plt
+from functools import wraps
 from modules.params import ModelParams
 from modules import data_loader, metrics, learning
 from modules.gmp_model import GMP
@@ -11,6 +12,8 @@ from modules.gmp_model import GMP
 DPI = 100
 SPECTRUM_TITLE = "Спектральная плотность мощнсоти (дБ)"
 FREQ_TITLE = "Частота (МГц)"
+U_K_EPOCHS = 500
+U_K_LR = 0.001
 
 logger = logging.getLogger("PA_DPD_FSM")
 logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
@@ -88,9 +91,13 @@ class PA_DPD_FSM:
         # DPD
         self.dpd_model_type = None
         self.dpd_params: ModelParams = None
-        self.dpd_archs = []
+        self.dpd_archs = ["dla", "ila", "ilc"]
+        self.current_arch = None
+        self.current_arch_index = 0
         self.dpd_models = {} # словарь: dpd_models["DLA"] = экземпляр модели
         
+        self.u_k = None
+
         # результаты
         self.results_no_noise = {} # {"DLA": {"nmse":…, "acpr":(l,r)}, …}
         self.noise_range = []
@@ -98,9 +105,6 @@ class PA_DPD_FSM:
         self.current_snr_index = 0
         # словарь шумовых результатов: noise_results["DLA"] = {"nmse":[…], "acpr_left":[…], "acpr_right":[…]}
         self.noise_results = {}
-
-        # Вспомогательные индексы
-        self.current_arch_index = 0
 
         logger.info("PA_DPD_FSM initialized with data_path=%s", data_path)
 
@@ -154,6 +158,20 @@ class PA_DPD_FSM:
         self._stop_event.clear()
         self._pause_event.set()
         logging.info("FSM reset to INIT")
+    
+    def _compute_and_store_results(self, input_signal, target_signal, key, store_dict, models_dict=None, model=None):
+        if not model:
+            y = input_signal
+        else:
+            y = model.forward(input_signal).detach()
+        y_lin = self.pa_model.forward(y).detach()
+        nmse = metrics.compute_nmse(y_lin, target_signal)
+        acpr = metrics.calculate_acpr(y_lin, self.acpr_meter)
+        spectrum = metrics.power_spectrum(y_lin, self.fs, self.nperseg)
+        store_dict[key] = {"nmse": nmse, "acpr": acpr, "spectrum": spectrum}
+        if models_dict is not None:
+            models_dict[key] = model
+
 
     def run(self):
         logger.info("FSM run started")
@@ -208,7 +226,7 @@ class PA_DPD_FSM:
         self.x_val = self.data["val_input"]
         self.y_val = self.data["val_output"]
 
-        self.dpd_archs = ["dla","ila", "ilc"]
+        self.dpd_archs = ["dla", "ila", "ilc"]
         self.results_no_noise = {arch: {} for arch in self.dpd_archs}
         self.results_no_noise["uk"] = {}
         self.noise_results = {arch: {"nmse":[], "acpr_left":[], "acpr_right":[]} for arch in self.dpd_archs}
@@ -328,58 +346,39 @@ class PA_DPD_FSM:
         for i in range(self.current_arch_index, len(self.dpd_archs)):
             arch = self.dpd_archs[i]
             logger.info("   CONFIGURE_DPD: проверка архитектуры %s", arch)
-            # создаём модель нужного класса
+
             cls = {"GMP": GMP}[p.model_type]
             model = cls(p.Ka,p.La,p.Kb,p.Lb,p.Mb,p.Kc,p.Lc,p.Mc,
-                        model_type=f"dpd_{arch.lower()}_grad")
+                        model_type=f"dpd_{arch}_grad")
 
-            # если нет сохранённого — нужно обучить
             if not model.load_coefficients():
-                # запоминаем, какую архитектуру тренить
                 logger.info("   Нет сохранённых весов для %s: перейдем к TRAIN_DPD", arch)
                 self.current_arch = arch
                 self.current_arch_index = i
-                self.dpd_models[arch] = model # сохраним для TRAIN_DPD
+                self.dpd_models[arch] = model
                 self.state = FSM_State.TRAIN_DPD
-                return # прерываем конфигурирование
+                return
 
-            # иначе сразу считаем метрики и сохраняем
-            y_dpd = model.forward(self.x_val).detach()
-            y_lin = self.pa_model.forward(y_dpd).detach()
-            nmse = metrics.compute_nmse(y_lin, self.y_val_target)
-            acpr_l, acpr_r = metrics.calculate_acpr(y_lin, self.acpr_meter)
-            spectrum = metrics.power_spectrum(y_lin, self.fs, self.nperseg)
-            logger.info("   Архитектура %s: загружены веса, NMSE=%.3f, ACPR=(%.3f, %.3f)", arch, nmse, acpr_l, acpr_r)
+            self._compute_and_store_results(self.x_val, self.y_val_target, 
+                                            arch, self.results_no_noise, 
+                                            self.dpd_models, model)
 
-            self.dpd_models[arch] = model
-
-            self.results_no_noise[arch] = {
-                "nmse": nmse,
-                "acpr": (acpr_l, acpr_r),
-                "spectrum": spectrum
-            }
+            logger.info("   Архитектура %s: загружены веса, NMSE=%.3f, ACPR=(%.3f, %.3f)", 
+                        arch, self.results_no_noise[arch]["nmse"], 
+                        self.results_no_noise[arch]["acpr"][0], self.results_no_noise[arch]["acpr"][1])
 
         if self._stop_event.is_set():
             return
         self._pause_event.wait()
 
         logger.info("   CONFIGURE_DPD: вычисление u_k для ILC на чистых данных")
-        u_k = learning.ilc_signal_grad(
+        self.u_k = learning.ilc_signal_grad(
             self.x_train, self.y_train_target, self.pa_model,
-            epochs=500, learning_rate=0.001
+            epochs=U_K_EPOCHS, learning_rate=U_K_LR
         )
-        u_k_pa = self.pa_model.forward(u_k).detach()
-        nmse_uk = metrics.compute_nmse(u_k_pa, self.y_train_target)
-        acpr_l_uk, acpr_r_uk = metrics.calculate_acpr(u_k_pa, self.acpr_meter)
-        spectrum_uk = metrics.power_spectrum(u_k_pa, self.fs, self.nperseg)
-        logger.info("   ILC u_k: NMSE=%.3f, ACPR=(%.3f, %.3f)", nmse_uk, acpr_l_uk, acpr_r_uk)
-        self.results_no_noise["uk"] = {
-            "nmse": nmse_uk,
-            "acpr": (acpr_l_uk, acpr_r_uk),
-            "spectrum": spectrum_uk
-        }
+        self._compute_and_store_results(self.u_k, self.y_train_target, 
+                                        "uk", self.results_no_noise)
 
-        # если все architectures обработаны — идём к PLOT_DPD
         self.state = FSM_State.PLOT_DPD
 
     def _train_dpd(self):
@@ -393,42 +392,21 @@ class PA_DPD_FSM:
 
         logger.info("STATE TRAIN_DPD: обучение архитектуры %s", arch)
 
-        # запускаем обучение для этой архитектуры
         if arch == "dla":
-            learning.optimize_dla_grad(
-                self.x_train, self.y_train_target,
-                model, self.pa_model,
-                epochs=p.epochs, learning_rate=p.lr
-            )
+            learning.optimize_dla_grad(self.x_train, self.y_train_target, 
+                                       model, self.pa_model, epochs=p.epochs, learning_rate=p.lr)
             model.save_coefficients()
             logger.info("   DLA обучена и сохранена")
+
         elif arch == "ila":
-            learning.optimize_ila_grad(
-                model, self.x_train, self.y_train, self.gain,
-                epochs=p.epochs, learning_rate=p.lr
-            )
+            learning.optimize_ila_grad(model, self.x_train, self.y_train, 
+                                       self.gain, epochs=p.epochs, learning_rate=p.lr)
             model.save_coefficients()
             logger.info("   ILA обучена и сохранена")
+
         elif arch == "ilc":
-            u_k = learning.ilc_signal_grad(
-                self.x_train, self.y_train_target, self.pa_model,
-                epochs=500, learning_rate=0.001
-            )
-            u_k_pa = self.pa_model.forward(u_k).detach()
-            nmse_uk = metrics.compute_nmse(u_k_pa, self.y_train_target)
-            acpr_l_uk, acpr_r_uk = metrics.calculate_acpr(u_k_pa, self.acpr_meter)
-            spectrum_uk = metrics.power_spectrum(u_k_pa, self.fs, self.nperseg)
-            logger.info("   ILC u_k до обучения: NMSE=%.3f, ACPR=(%.3f, %.3f)", nmse_uk, acpr_l_uk, acpr_r_uk)
-            # Сохраним метрики u_k
-            self.results_no_noise["uk"] = {
-                "nmse": nmse_uk,
-                "acpr": (acpr_l_uk, acpr_r_uk),
-                "spectrum": spectrum_uk
-            }
-            model.optimize_coefficients_grad(
-                self.x_train, u_k,
-                epochs=p.epochs, learning_rate=p.lr
-            )
+            model.optimize_coefficients_grad(self.x_train, self.u_k,
+                                             epochs=p.epochs, learning_rate=p.lr)
             model.save_coefficients()
             logger.info("   ILC DPD обучена и сохранена")
 
@@ -436,20 +414,10 @@ class PA_DPD_FSM:
             return
         self._pause_event.wait()
 
-        y_dpd = model.forward(self.x_val).detach()
-        y_lin = self.pa_model.forward(y_dpd).detach()
-        nmse = metrics.compute_nmse(y_lin, self.y_val_target)
-        acpr_l, acpr_r = metrics.calculate_acpr(y_lin, self.acpr_meter)
-        spectrum = metrics.power_spectrum(y_lin, self.fs, self.nperseg)
-        logger.info("   После обучения %s: NMSE=%.3f, ACPR=(%.3f, %.3f)", arch, nmse, acpr_l, acpr_r)
+        self._compute_and_store_results(self.x_val, self.y_val_target, 
+                                            arch, self.results_no_noise, 
+                                            models_dict=None, model=model)
 
-        self.results_no_noise[arch] = {
-            "nmse": nmse,
-            "acpr": (acpr_l, acpr_r),
-            "spectrum": spectrum
-        }
-
-        # переходим к следующей архитектуре
         self.current_arch_index += 1
         self.state = FSM_State.CONFIGURE_DPD
 
@@ -491,11 +459,11 @@ class PA_DPD_FSM:
             logger.debug("  Отображаем спектры DPD в GUI")
             # self.gui.display_dpd_figure(fig)
             self.gui.after(0, lambda f=fig: self.gui.display_dpd_figure(f))
-            # self.gui.update()
         else:
             logger.debug("  Отображаем спектры DPD через plt.show()")
             plt.figure()
             plt.show()
+
         self.state = FSM_State.SELECT_NOISE_RANGE
     
     def _select_noise_range(self):
@@ -526,7 +494,7 @@ class PA_DPD_FSM:
 
             u_k_noisy = learning.ilc_signal_grad(
                 self.x_train, self.y_train_target, self.pa_model,
-                epochs=500, learning_rate=0.001,
+                epochs=U_K_EPOCHS, learning_rate=U_K_LR,
                 add_noise=True, snr=snr, fs=self.fs, bw=self.bw_main_ch
             )
             u_k_pa = self.pa_model.forward(u_k_noisy).detach()
@@ -555,8 +523,7 @@ class PA_DPD_FSM:
                 )
                 dpd_noisy = cls(*params, model_type=base_model.model_type)
 
-                # выбираем стратегию обучения с шумом
-                if arch.lower() == "dla":
+                if arch == "dla":
                     learning.optimize_dla_grad(
                         self.x_train, self.y_train_target,
                         dpd_noisy, self.pa_model,
@@ -571,7 +538,7 @@ class PA_DPD_FSM:
                         snr, self.fs, self.bw_main_ch, self.acpr_meter
                     )
 
-                elif arch.lower() == "ila":
+                elif arch == "ila":
                     learning.optimize_ila_grad(
                         dpd_noisy, self.x_train, self.y_train, self.gain,
                         epochs=self.dpd_params.epochs,
@@ -586,7 +553,7 @@ class PA_DPD_FSM:
                         snr, self.fs, self.bw_main_ch, self.acpr_meter
                     )
 
-                elif arch.lower() == "ilc":
+                elif arch == "ilc":
                     dpd_noisy.optimize_coefficients_grad(
                         self.x_train, u_k_noisy, 
                         epochs=self.dpd_params.epochs, learning_rate=self.dpd_params.lr
@@ -653,7 +620,6 @@ class PA_DPD_FSM:
             logger.debug("  Отображаем шумовые графики в GUI")
             # self.gui.display_noise_figures(fig1, fig2, fig3)
             self.gui.after(0, lambda: self.gui.display_noise_figures(fig1, fig2, fig3))
-            # self.gui.update()
         else:
             logger.debug("  Отображаем шумовые графики через plt.show()")
             plt.figure()
@@ -663,7 +629,6 @@ class PA_DPD_FSM:
     
     def on_fsm_finished(self):
         logging.info("GUI: FSM finished; updating buttons")
-        # Включаем Start, отключаем Pause/Resume/Stop
         self.start_btn.config(state="normal")
         self.pause_btn.config(state="disabled")
         self.resume_btn.config(state="disabled")

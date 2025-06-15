@@ -17,7 +17,6 @@ class TextHandler(logging.Handler):
     def __init__(self, text_widget):
         super().__init__()
         self.text_widget = text_widget
-        # Опционально: установить форматтер
         fmt = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
         self.setFormatter(fmt)
 
