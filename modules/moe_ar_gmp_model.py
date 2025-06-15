@@ -5,14 +5,14 @@ from modules.gmp_model import GMP
 from modules.gmp_ar_model import GMP_AR
 
 class MoE_GMP_AR(nn.Module):
-    def __init__(self, num_experts, gmp_narx_kwargs):
+    def __init__(self, num_experts, gmp_ar_kwargs):
         super().__init__()
         self.experts = nn.ModuleList([
-            GMP_AR(**gmp_narx_kwargs) for _ in range(num_experts)
+            GMP_AR(**gmp_ar_kwargs) for _ in range(num_experts)
         ])
 
         self.logits = nn.Parameter(torch.zeros(num_experts))
-        self.Dy = gmp_narx_kwargs['Dy']
+        self.Dy = gmp_ar_kwargs['Dy']
         self.d = torch.nn.Parameter(0.001 * torch.randn(self.Dy, dtype=torch.cfloat))
         self.logit_weights = torch.nn.Parameter(torch.tensor([0.01, 0.01]))
 

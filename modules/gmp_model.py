@@ -47,7 +47,7 @@ class GMP(nn.Module):
             loss.backward()
             optimizer.step()
 
-            if epoch%99==0:
+            if epoch%100==0:
                 print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
     
 

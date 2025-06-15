@@ -1,9 +1,20 @@
 import enum
+import logging
+import threading
 import numpy as np
 import matplotlib.pyplot as plt
 from modules.params import ModelParams
 from modules import data_loader, metrics, learning
 from modules.gmp_model import GMP
+
+
+DPI = 100
+SPECTRUM_TITLE = "Спектральная плотность мощнсоти (дБ)"
+FREQ_TITLE = "Частота (МГц)"
+
+logger = logging.getLogger("PA_DPD_FSM")
+logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+
 
 class FSM_State(enum.Enum):
     INIT = enum.auto()
@@ -35,9 +46,14 @@ class PA_DPD_FSM:
         FSM_State.PLOT_NOISE: "_plot_noise",
     }
 
-    def __init__(self, data_path: str):
+    def __init__(self, data_path: str, gui=None):
         self.data_path = data_path
+        self.gui = gui
         self.state = FSM_State.INIT
+
+        self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()
 
         # данные
         self.data = None
@@ -73,7 +89,6 @@ class PA_DPD_FSM:
         self.dpd_model_type = None
         self.dpd_params: ModelParams = None
         self.dpd_archs = []
-        # self.selected_archs = []
         self.dpd_models = {} # словарь: dpd_models["DLA"] = экземпляр модели
         
         # результаты
@@ -87,38 +102,98 @@ class PA_DPD_FSM:
         # Вспомогательные индексы
         self.current_arch_index = 0
 
+        logger.info("PA_DPD_FSM initialized with data_path=%s", data_path)
+
     # --- интерфейс от GUI ---
     def set_pa_params(self, params: ModelParams):
         self.pa_params = params
+        logger.info("PA params set: %s", params)
 
     def set_dpd_params(self, params: ModelParams):
         self.dpd_params = params
+        logger.info("DPD params set: %s", params)
 
     def set_noise_range(self, snr_range: list[int], num_realizations: int = 1):
         start, end, step = snr_range
         self.noise_range = [snr for snr in range(start, end, step)]
         self.num_realizations = num_realizations
+        logger.info("Noise range set: %s, realizations=%d", self.noise_range, num_realizations)
+    
+    def pause(self):
+        """Приостановить выполнение FSM."""
+        self._pause_event.clear()
+        logging.info("FSM paused")
 
-    # --- главный цикл ---
+    def resume(self):
+        """Возобновить, если был на паузе."""
+        self._pause_event.set()
+        logging.info("FSM resumed")
+
+    def stop(self):
+        """
+        Остановить FSM: прерывает текущее выполнение. 
+        После этого run() выйдет из цикла. 
+        """
+        self._stop_event.set()
+        # если на паузе, разблокируем, чтобы выйти
+        self._pause_event.set()
+        logging.info("FSM stop requested")
+
+    def reset(self):
+        """
+        Сбросить FSM к начальному состоянию. 
+        Вызывать после stop(), когда FSM-поток завершился.
+        """
+        # Сброс состояния и индексов
+        self.state = FSM_State.INIT
+        self.current_arch_index = 0
+        self.current_arch = None
+        self.results_no_noise.clear()
+        self.noise_results.clear()
+        # Очистить события:
+        self._stop_event.clear()
+        self._pause_event.set()
+        logging.info("FSM reset to INIT")
+
     def run(self):
+        logger.info("FSM run started")
         try:
-            while self.state not in (FSM_State.DONE, FSM_State.ERROR):
-                handler = getattr(self, self._HANDLERS[self.state], None)
-                if handler is None:
+            while not self._stop_event.is_set() and self.state not in (FSM_State.DONE, FSM_State.ERROR):
+                self._pause_event.wait()
+                if self._stop_event.is_set():
+                    break
+
+                handler_name = self._HANDLERS.get(self.state)
+                if handler_name is None:
                     raise RuntimeError(f"No handler for state {self.state}")
+                handler = getattr(self, handler_name)
+                logging.info(f"Entering state: {self.state.name}")
                 handler()
+                if self.gui:
+                    self.gui.after(0, self.gui.refresh_status)
+                if self._stop_event.is_set():
+                    break
+            if self._stop_event.is_set():
+                logging.info("FSM stopped by request")
+            elif self.state == FSM_State.DONE:
+                logging.info("FSM completed successfully")
+            elif self.state == FSM_State.ERROR:
+                logging.error("FSM entered ERROR state")
+
         except Exception as e:
             self.state = FSM_State.ERROR
-            print("FSM error:", e)
+            logging.exception("Exception in FSM.run:")
+        finally:
+            if self.gui:
+                self.gui.after(0, self.gui.on_fsm_finished)
 
-    # ----------------------------
-    #  Реализация состояний
-    # ----------------------------
 
     def _init(self):
-        """INIT → ESTIMATE_GAIN."""
-        print(">> STATE: INIT — загрузка данных …")
-        
+        logger.info("STATE INIT: загрузка данных")
+
+        if self._stop_event.is_set():
+            return
+
         self.data = data_loader.load_data(self.data_path)
         config = self.data["config"]
         self.fs = config["input_signal_fs"]
@@ -152,13 +227,15 @@ class PA_DPD_FSM:
             return_adjacent_powers=True
         )
 
+        logger.info("   Data loaded: fs=%s, bw_main_ch=%s", self.fs, self.bw_main_ch)
         self.state = FSM_State.ESTIMATE_GAIN
 
     def _estimate_gain(self):
-        """ESTIMATE_GAIN → SELECT_PA_MODEL_TYPE."""
-        print(">> STATE: ESTIMATE_GAIN — вычисляем gain …")
+        logger.info("STATE ESTIMATE_GAIN")
+        if self._stop_event.is_set():
+            return
         self.gain = metrics.calculate_gain_complex(self.x_train, self.y_train)
-        print(f"    Gain = {self.gain:.2f}")
+        logger.info(f"  Gain = {self.gain:.2f}")
         self.y_train_target = self.gain * self.x_train
         self.y_val_target = self.gain * self.x_val
 
@@ -167,6 +244,9 @@ class PA_DPD_FSM:
     def _configure_pa(self):
         assert self.pa_params, "PA params not set"
         p = self.pa_params
+        logger.info("STATE CONFIGURE_PA: параметры PA %s", p)
+        if self._stop_event.is_set():
+            return
 
         cls = {"GMP": GMP}[p.model_type]
         model = cls(p.Ka,p.La,p.Kb,p.Lb,p.Mb,p.Kc,p.Lc,p.Mc, model_type="pa_grad")
@@ -174,49 +254,80 @@ class PA_DPD_FSM:
         self.pa_model = model
 
         if not model.load_coefficients():
+            logger.info("   Нет сохранённых весов PA: перейдем к TRAIN_PA")
             self.state = FSM_State.TRAIN_PA
             return
 
         y_pa = model.forward(self.x_val).detach()
         self.nmse_pa = metrics.compute_nmse(y_pa, self.y_val)
+        logger.info("   Загружены веса PA, NMSE_PA=%.3f dB", self.nmse_pa)
         self.state = FSM_State.PLOT_PA
 
     def _train_pa(self):
         p = self.pa_params
+        logger.info("STATE TRAIN_PA: обучение PA, epochs=%d, lr=%.5f", p.epochs, p.lr)
 
+        if self._stop_event.is_set():
+            return
+        
         self.pa_model.optimize_coefficients_grad(self.x_train, self.y_train, epochs=p.epochs, learning_rate=p.lr)
         self.pa_model.save_coefficients()
 
         y_pa = self.pa_model.forward(self.x_val).detach()
         self.nmse_pa = metrics.compute_nmse(y_pa, self.y_val)
-
+        logger.info("   После обучения PA, NMSE_PA=%.3f dB", self.nmse_pa)
         self.state = FSM_State.PLOT_PA
 
     def _plot_pa(self):
+        logger.info("STATE PLOT_PA: строим спектр PA")
+        if self._stop_event.is_set():
+            return
+        
         y_pa = self.pa_model.forward(self.x_val).detach()
         freqs, spectrum_out = metrics.power_spectrum(self.y_val, self.fs, self.nperseg)
-        _, spectrum_pa   = metrics.power_spectrum(y_pa, self.fs, self.nperseg)
+        _, spectrum_pa = metrics.power_spectrum(y_pa, self.fs, self.nperseg)
 
-        plt.figure(figsize=(8,4))
-        plt.plot(freqs/1e6,10*np.log10(np.abs(spectrum_out)), label="out")
-        plt.plot(freqs/1e6,10*np.log10(np.abs(spectrum_pa)), label=f"PA (NMSE {self.nmse_pa:.1f} dB)")
-        plt.legend()
-        plt.grid()
-        plt.show()
+        fig = plt.Figure(figsize=(6,3), dpi=DPI)
+        ax = fig.add_subplot(111)
+        ax.plot(freqs/1e6, 10*np.log10(np.abs(spectrum_out)), label="out")
+        ax.plot(freqs/1e6, 10*np.log10(np.abs(spectrum_pa)), label=f"PA (NMSE {self.nmse_pa:.1f} dB)")
+        ax.set_xlabel(FREQ_TITLE)
+        ax.set_ylabel(SPECTRUM_TITLE)
+        ax.legend()
+        ax.grid()
+
+        # отображаем в GUI
+        if self.gui:
+            logger.debug("  Отображаем спектр PA в GUI")
+            self.gui.after(0, lambda f=fig: self.gui.display_pa_figure(f))
+        else:
+            logger.debug("  Отображаем спектр PA через plt.show()")
+            plt.figure(figsize=(8,4))
+            plt.plot(freqs/1e6,10*np.log10(np.abs(spectrum_out)), label="out")
+            plt.plot(freqs/1e6,10*np.log10(np.abs(spectrum_pa)), label=f"PA (NMSE {self.nmse_pa:.1f} dB)")
+            plt.legend()
+            plt.grid()
+            plt.show()
 
         self.state = FSM_State.CONFIGURE_DPD
 
     def _configure_dpd(self):
+        if self._stop_event.is_set():
+            return
+        
         assert self.dpd_params, "DPD params not set"
         p = self.dpd_params
+        logger.info("STATE CONFIGURE_DPD: параметры DPD %s", p)
         
         if self.current_arch_index == 0:
             self.dpd_models = {}
             self.results_no_noise = {}
+            logger.debug("  Инициализация списка DPD моделей и результатов")
 
         # Проходим по архитектурам начиная с current_arch_index
         for i in range(self.current_arch_index, len(self.dpd_archs)):
             arch = self.dpd_archs[i]
+            logger.info("   CONFIGURE_DPD: проверка архитектуры %s", arch)
             # создаём модель нужного класса
             cls = {"GMP": GMP}[p.model_type]
             model = cls(p.Ka,p.La,p.Kb,p.Lb,p.Mb,p.Kc,p.Lc,p.Mc,
@@ -225,6 +336,7 @@ class PA_DPD_FSM:
             # если нет сохранённого — нужно обучить
             if not model.load_coefficients():
                 # запоминаем, какую архитектуру тренить
+                logger.info("   Нет сохранённых весов для %s: перейдем к TRAIN_DPD", arch)
                 self.current_arch = arch
                 self.current_arch_index = i
                 self.dpd_models[arch] = model # сохраним для TRAIN_DPD
@@ -234,9 +346,10 @@ class PA_DPD_FSM:
             # иначе сразу считаем метрики и сохраняем
             y_dpd = model.forward(self.x_val).detach()
             y_lin = self.pa_model.forward(y_dpd).detach()
-            nmse = metrics.compute_nmse(y_lin, self.gain * self.x_val)
+            nmse = metrics.compute_nmse(y_lin, self.y_val_target)
             acpr_l, acpr_r = metrics.calculate_acpr(y_lin, self.acpr_meter)
             spectrum = metrics.power_spectrum(y_lin, self.fs, self.nperseg)
+            logger.info("   Архитектура %s: загружены веса, NMSE=%.3f, ACPR=(%.3f, %.3f)", arch, nmse, acpr_l, acpr_r)
 
             self.dpd_models[arch] = model
 
@@ -246,15 +359,24 @@ class PA_DPD_FSM:
                 "spectrum": spectrum
             }
 
+        if self._stop_event.is_set():
+            return
+        self._pause_event.wait()
+
+        logger.info("   CONFIGURE_DPD: вычисление u_k для ILC на чистых данных")
         u_k = learning.ilc_signal_grad(
             self.x_train, self.y_train_target, self.pa_model,
             epochs=500, learning_rate=0.001
         )
         u_k_pa = self.pa_model.forward(u_k).detach()
+        nmse_uk = metrics.compute_nmse(u_k_pa, self.y_train_target)
+        acpr_l_uk, acpr_r_uk = metrics.calculate_acpr(u_k_pa, self.acpr_meter)
+        spectrum_uk = metrics.power_spectrum(u_k_pa, self.fs, self.nperseg)
+        logger.info("   ILC u_k: NMSE=%.3f, ACPR=(%.3f, %.3f)", nmse_uk, acpr_l_uk, acpr_r_uk)
         self.results_no_noise["uk"] = {
-            "nmse": metrics.compute_nmse(u_k_pa, self.y_train_target),
-            "acpr": metrics.calculate_acpr(u_k_pa, self.acpr_meter),
-            "spectrum": metrics.power_spectrum(u_k_pa, self.fs, self.nperseg)
+            "nmse": nmse_uk,
+            "acpr": (acpr_l_uk, acpr_r_uk),
+            "spectrum": spectrum_uk
         }
 
         # если все architectures обработаны — идём к PLOT_DPD
@@ -265,42 +387,61 @@ class PA_DPD_FSM:
         p = self.dpd_params
         model = self.dpd_models[arch]
 
+        if self._stop_event.is_set():
+            return
+        self._pause_event.wait()
+
+        logger.info("STATE TRAIN_DPD: обучение архитектуры %s", arch)
+
         # запускаем обучение для этой архитектуры
-        if arch == "DLA":
+        if arch == "dla":
             learning.optimize_dla_grad(
                 self.x_train, self.y_train_target,
                 model, self.pa_model,
                 epochs=p.epochs, learning_rate=p.lr
             )
             model.save_coefficients()
-        elif arch == "ILA":
+            logger.info("   DLA обучена и сохранена")
+        elif arch == "ila":
             learning.optimize_ila_grad(
                 model, self.x_train, self.y_train, self.gain,
                 epochs=p.epochs, learning_rate=p.lr
             )
             model.save_coefficients()
-        elif arch == "ILC":
+            logger.info("   ILA обучена и сохранена")
+        elif arch == "ilc":
             u_k = learning.ilc_signal_grad(
                 self.x_train, self.y_train_target, self.pa_model,
                 epochs=500, learning_rate=0.001
             )
-            uk_pa = self.pa_model.forward(u_k).detach()
+            u_k_pa = self.pa_model.forward(u_k).detach()
+            nmse_uk = metrics.compute_nmse(u_k_pa, self.y_train_target)
+            acpr_l_uk, acpr_r_uk = metrics.calculate_acpr(u_k_pa, self.acpr_meter)
+            spectrum_uk = metrics.power_spectrum(u_k_pa, self.fs, self.nperseg)
+            logger.info("   ILC u_k до обучения: NMSE=%.3f, ACPR=(%.3f, %.3f)", nmse_uk, acpr_l_uk, acpr_r_uk)
+            # Сохраним метрики u_k
             self.results_no_noise["uk"] = {
-                "nmse": metrics.compute_nmse(uk_pa, self.y_train_target),
-                "acpr": metrics.calculate_acpr(uk_pa, self.acpr_meter),
-                "spectrum": metrics.power_spectrum(uk_pa, self.fs, self.nperseg)
+                "nmse": nmse_uk,
+                "acpr": (acpr_l_uk, acpr_r_uk),
+                "spectrum": spectrum_uk
             }
             model.optimize_coefficients_grad(
                 self.x_train, u_k,
                 epochs=p.epochs, learning_rate=p.lr
             )
             model.save_coefficients()
+            logger.info("   ILC DPD обучена и сохранена")
+
+        if self._stop_event.is_set():
+            return
+        self._pause_event.wait()
 
         y_dpd = model.forward(self.x_val).detach()
         y_lin = self.pa_model.forward(y_dpd).detach()
         nmse = metrics.compute_nmse(y_lin, self.y_val_target)
         acpr_l, acpr_r = metrics.calculate_acpr(y_lin, self.acpr_meter)
         spectrum = metrics.power_spectrum(y_lin, self.fs, self.nperseg)
+        logger.info("   После обучения %s: NMSE=%.3f, ACPR=(%.3f, %.3f)", arch, nmse, acpr_l, acpr_r)
 
         self.results_no_noise[arch] = {
             "nmse": nmse,
@@ -313,30 +454,54 @@ class PA_DPD_FSM:
         self.state = FSM_State.CONFIGURE_DPD
 
     def _plot_dpd(self):
-        # Спектры DPD
+        logger.info("STATE PLOT_DPD: строим спектр PA+DPD и ILC u_k")
+        if self._stop_event.is_set():
+            return
+        self._pause_event.wait()
+
         freqs, spectrum_in = metrics.power_spectrum(self.x_val, self.fs, self.nperseg)
-        plt.figure(figsize=(8,4))
-        plt.plot(freqs/1e6, 10*np.log10(np.abs(spectrum_in)), label="in")
+
+        fig = plt.Figure(figsize=(6,3), dpi=DPI)
+        ax = fig.add_subplot(111)
+        ax.plot(freqs/1e6, 10*np.log10(np.abs(spectrum_in)), label="in")
 
         # PA
         y_pa = self.pa_model.forward(self.x_val).detach()
         _, spec_pa = metrics.power_spectrum(y_pa, self.fs, self.nperseg)
-        plt.plot(freqs/1e6, 10*np.log10(np.abs(spec_pa)), label="PA")
+        ax.plot(freqs/1e6, 10*np.log10(np.abs(spec_pa)), label="PA")
 
         # DPD archs
         for arch in self.dpd_archs:
-            f, s = self.results_no_noise[arch]["spectrum"]
-            plt.plot(f/1e6, 10*np.log10(np.abs(s)), label=arch.upper())
+            res = self.results_no_noise.get(arch)
+            if res and "spectrum" in res:
+                f, s = res["spectrum"]
+                ax.plot(f/1e6, 10*np.log10(np.abs(s)), label=arch.upper())
 
         # UK сигнал
-        fuk, suk = self.results_no_noise["uk"]["spectrum"]
-        plt.plot(fuk/1e6, 10*np.log10(np.abs(suk)), "--", label="uk")
+        if "uk" in self.results_no_noise:
+            f_uk, s_uk = self.results_no_noise["uk"]["spectrum"]
+            ax.plot(f_uk/1e6, 10*np.log10(np.abs(s_uk)), "--", label="UK")
+        ax.set_xlabel("Частота (МГц)")
+        ax.set_ylabel(SPECTRUM_TITLE)
+        ax.legend()
+        ax.grid()
 
-        plt.legend(); plt.grid(); plt.show()
+        # вывод на GUI
+        if self.gui:
+            logger.debug("  Отображаем спектры DPD в GUI")
+            # self.gui.display_dpd_figure(fig)
+            self.gui.after(0, lambda f=fig: self.gui.display_dpd_figure(f))
+            # self.gui.update()
+        else:
+            logger.debug("  Отображаем спектры DPD через plt.show()")
+            plt.figure()
+            plt.show()
         self.state = FSM_State.SELECT_NOISE_RANGE
     
     def _select_noise_range(self):
-        """SELECT_NOISE_RANGE → EVALUATE_NOISE."""
+        logger.info("STATE SELECT_NOISE_RANGE: инициализация шумовых вычислений")
+        if self._stop_event.is_set():
+            return
         # Предполагаем, что GUI уже вызвал set_noise_range()
         assert self.noise_range, "Noise range not set!"
         assert self.num_realizations is not None, "num_realizations not set!"
@@ -352,10 +517,12 @@ class PA_DPD_FSM:
         self.state = FSM_State.EVALUATE_NOISE
 
     def _evaluate_noise(self):
-        """EVALUATE_NOISE → PLOT_NOISE."""
-        # Бежим по всем SNR
+        logger.info("STATE EVALUATE_NOISE: запуск по шумовым SNR")
         for snr in self.noise_range:
-            print(f">> STATE: EVALUATE_NOISE — SNR = {snr} dB")
+            if self._stop_event.is_set():
+                break
+            self._pause_event.wait()
+            logger.info("   Обработка SNR=%d dB", snr)
 
             u_k_noisy = learning.ilc_signal_grad(
                 self.x_train, self.y_train_target, self.pa_model,
@@ -371,11 +538,13 @@ class PA_DPD_FSM:
             self.noise_results["uk"]["acpr_left"].append(l_u_k)
             self.noise_results["uk"]["acpr_right"].append(r_u_k)
 
-            print(f"   • [u_k @ {snr}dB] NMSE={self.noise_results['uk']['nmse'][-1]:.2f}, "
-                      f"ACPR_L={self.noise_results['uk']['acpr_left'][-1]:.2f}, "
-                      f"ACPR_R={self.noise_results['uk']['acpr_right'][-1]:.2f}")
+            logger.info("   u_k @%ddB: NMSE=%.3f, ACPR=(%.3f, %.3f)", snr, nm_u_k, l_u_k, r_u_k)
 
             for arch, base_model in self.dpd_models.items():
+                if self._stop_event.is_set():
+                    break
+                self._pause_event.wait()
+                logger.info("   Обработка архитектуры %s при SNR=%d", arch, snr)
                 # создаём чистую копию модели той же архитектуры
                 cls = type(base_model)
                 params = (
@@ -427,51 +596,75 @@ class PA_DPD_FSM:
                         self.num_realizations, y_out, self.y_val_target,
                         snr, self.fs, self.bw_main_ch, self.acpr_meter
                     )
+                
+                else:
+                    logger.warning("    Неизвестная архитектура %s, пропускаем", arch)
+                    continue
+
+                if self._stop_event.is_set():
+                    break
 
                 self.noise_results[arch]["nmse"].append(nm)
                 self.noise_results[arch]["acpr_left"].append(l)
                 self.noise_results[arch]["acpr_right"].append(r)
-
-                print(f"   • [{arch} @ {snr}dB] NMSE={self.noise_results[arch]['nmse'][-1]:.2f}, "
-                      f"ACPR_L={self.noise_results[arch]['acpr_left'][-1]:.2f}, "
-                      f"ACPR_R={self.noise_results[arch]['acpr_right'][-1]:.2f}")
+                logger.info("   %s @%ddB: NMSE=%.3f, ACPR=(%.3f, %.3f)", arch, snr, nm, l, r)
 
         # После всех SNR
         self.state = FSM_State.PLOT_NOISE
 
     def _plot_noise(self):
-        """PLOT_NOISE → DONE."""
+        logger.info("STATE PLOT_NOISE: строим графики шумовых результатов")
+        if self._stop_event.is_set():
+            return
+        
         snr_vals = self.noise_range
 
         # 1) NMSE vs SNR
-        plt.figure(figsize=(8,4))
+        fig1 = plt.Figure(figsize=(5,3), dpi=DPI)
+        ax1 = fig1.add_subplot(111)
         for arch, res in self.noise_results.items():
-            plt.plot(snr_vals, res["nmse"], marker='o', label=arch)
-        plt.xlabel("SNR (дБ)")
-        plt.ylabel("NMSE (дБ)")
-        plt.title("NMSE vs SNR")
-        plt.grid()
-        plt.legend()
-        plt.show()
+            ax1.plot(snr_vals, res["nmse"], marker='o', label=arch.upper())
+        ax1.set_xlabel("SNR (дБ)")
+        ax1.set_ylabel("NMSE (дБ)")
+        ax1.set_title("NMSE vs SNR")
+        ax1.grid()
+        ax1.legend()
 
         # 2) ACPR Left & Right vs SNR
-        plt.figure(figsize=(12,5))
-        plt.subplot(1,2,1)
+        fig2 = plt.Figure(figsize=(5,3), dpi=DPI)
+        ax2 = fig2.add_subplot(111)
         for arch, res in self.noise_results.items():
-            plt.plot(snr_vals, res["acpr_left"], marker='o', label=arch)
-        plt.xlabel("SNR (дБ)")
-        plt.ylabel("ACPR Left (дБ)")
-        plt.grid()
-        plt.legend()
+            ax2.plot(snr_vals, res["acpr_left"], marker='o', label=arch.upper())
+        ax2.set_xlabel("SNR (дБ)")
+        ax2.set_ylabel("ACPR Left (дБ)")
+        ax2.grid()
+        ax2.legend()
 
-        plt.subplot(1,2,2)
+        fig3 = plt.Figure(figsize=(5,3), dpi=DPI)
+        ax3 = fig3.add_subplot(111)
         for arch, res in self.noise_results.items():
-            plt.plot(snr_vals, res["acpr_right"], marker='o', label=arch)
-        plt.xlabel("SNR (дБ)")
-        plt.ylabel("ACPR Right (дБ)")
-        plt.grid(); plt.legend()
+            ax3.plot(snr_vals, res["acpr_right"], marker='o', label=arch.upper())
+        ax3.set_xlabel("SNR (дБ)")
+        ax3.set_ylabel("ACPR Right (дБ)")
+        ax3.grid()
+        ax3.legend()
 
-        plt.tight_layout()
-        plt.show()
+        if self.gui:
+            logger.debug("  Отображаем шумовые графики в GUI")
+            # self.gui.display_noise_figures(fig1, fig2, fig3)
+            self.gui.after(0, lambda: self.gui.display_noise_figures(fig1, fig2, fig3))
+            # self.gui.update()
+        else:
+            logger.debug("  Отображаем шумовые графики через plt.show()")
+            plt.figure()
+            plt.show()
 
         self.state = FSM_State.DONE
+    
+    def on_fsm_finished(self):
+        logging.info("GUI: FSM finished; updating buttons")
+        # Включаем Start, отключаем Pause/Resume/Stop
+        self.start_btn.config(state="normal")
+        self.pause_btn.config(state="disabled")
+        self.resume_btn.config(state="disabled")
+        self.stop_btn.config(state="disabled")

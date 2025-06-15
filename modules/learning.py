@@ -25,7 +25,7 @@ def optimize_dla_grad(input_data, target_data, dpd_model, pa_model, epochs=10000
         loss.backward()
         optimizer.step()
 
-        if epoch%99==0:
+        if epoch%100==0:
                 print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
 
     print("DLA optimization completed.")
@@ -54,7 +54,7 @@ def optimize_ila_grad(dpd_model, input_data, output_data, gain, epochs=100000, l
         loss.backward()
         optimizer.step()
 
-        if epoch%99==0:
+        if epoch%100==0:
             print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
 
     print("ILA-DPD Training Complete.")
@@ -82,7 +82,7 @@ def ilc_signal_grad(input_data, target_data, pa_model, epochs=1000000, learning_
         loss.backward()
         optimizer.step()
 
-        if epoch%99==0:
+        if epoch%100==0:
             print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
 
     return u.detach()
