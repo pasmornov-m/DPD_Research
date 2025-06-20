@@ -22,11 +22,23 @@ def compute_mse(x, y):
 
 
 def compute_nmse(prediction, ground_truth):
-    prediction, ground_truth = map(to_torch_tensor, (prediction, ground_truth))
+    if torch.is_complex(prediction):
+        prediction = torch.view_as_real(prediction)
+    if torch.is_complex(ground_truth):
+        ground_truth = torch.view_as_real(ground_truth)
+
+    if prediction.shape != ground_truth.shape:
+        raise ValueError(f"Формы входов не совпадают: prediction {prediction.shape}, ground_truth {ground_truth.shape}")
+    if prediction.shape[-1] != 2:
+        raise ValueError("Ожидается последний размер = 2 (I, Q)")
+
     mse = compute_mse(prediction, ground_truth)
-    energy = (ground_truth.real ** 2 + ground_truth.imag ** 2).mean()
+
+    energy = (ground_truth ** 2).sum(dim=-1).mean()
+
     if energy == 0:
         raise ZeroDivisionError("Energy of the ground truth is zero.")
+
     return 10 * torch.log10(mse / energy)
 
 

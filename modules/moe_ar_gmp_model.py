@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from modules.gmp_model import GMP
 from modules.gmp_ar_model import GMP_AR
 
 class MoE_GMP_AR(nn.Module):
@@ -43,3 +41,30 @@ class MoE_GMP_AR(nn.Module):
         y_ar[self.Dy:] = y_ar_part[:-1]
 
         return y_ar
+
+
+class MoE_GMP_AR(nn.Module):
+    def __init__(self, num_experts, gmp_ar_kwargs):
+        super().__init__()
+        self.experts = nn.ModuleList([
+            GMP_AR(**gmp_ar_kwargs) for _ in range(num_experts)
+        ])
+
+        self.logits = nn.Parameter(torch.zeros(num_experts))
+        self.Dy = gmp_ar_kwargs['Dy']
+        self.logit_weight = torch.nn.Parameter(torch.tensor([0.01]))
+
+    def forward(self, x):
+        
+        weights = torch.softmax(self.logits, dim=0)
+
+        ys = [expert(x) for expert in self.experts]
+
+        y_stack = torch.stack(ys, dim=-1)
+        y_weighted = (y_stack * weights).mean(dim=-1)
+
+        w_gmp = torch.softmax(self.logit_weight, dim=0)
+        y = w_gmp * y_weighted
+
+        return y
+    

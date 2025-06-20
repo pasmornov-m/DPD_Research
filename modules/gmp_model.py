@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import os
-from modules.utils import to_torch_tensor, check_early_stopping
+from modules.utils import to_torch_tensor
 from modules.metrics import compute_mse
 
 

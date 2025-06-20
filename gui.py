@@ -7,7 +7,7 @@ from tkinter.scrolledtext import ScrolledText
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from modules.params import ModelParams
-from modules.fsm import PA_DPD_FSM
+from modules.fsm_for_gui import PA_DPD_FSM
 
 
 DATA_PATH = "./DPA_200MHz"
@@ -166,9 +166,7 @@ class FSMGUI(tk.Tk):
         # Listbox для файлов
         self.files_listbox = tk.Listbox(files_frame, height=15)
         self.files_listbox.pack(fill="both", expand=True)
-        # Обновить сразу при старте
         self.update_file_list()
-        # Можно опционально: периодически опрашивать папку:
         self.after(5000, self.periodic_update_file_list)
 
         # Периодически обновлять статус из FSM
