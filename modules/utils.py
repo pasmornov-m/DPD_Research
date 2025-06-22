@@ -21,7 +21,7 @@ def moving_average(arr, freqs, fs, window_size):
     f_smoothed = np.fft.fftshift(np.fft.fftfreq(len(psd_smoothed), d=1/fs))
     return f_smoothed, psd_smoothed
 
-def IQ_to_complex(iq_signal):
+def iq_to_complex(iq_signal):
     i_values = iq_signal[..., 0]
     q_values = iq_signal[..., 1]
     complex_signals = i_values + 1j * q_values

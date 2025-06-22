@@ -1,5 +1,9 @@
 import torch
-from modules.utils import to_torch_tensor, check_early_stopping
+from torch import nn
+from torch.optim.optimizer import Optimizer
+from torch.utils.data import Dataset, DataLoader
+from typing import Callable
+from modules.utils import to_torch_tensor, complex_to_iq
 from modules.metrics import compute_mse, add_complex_noise
 
 def optimize_dla_grad(input_data, target_data, dpd_model, pa_model, epochs=100000, learning_rate=1e-3, 
@@ -12,9 +16,11 @@ def optimize_dla_grad(input_data, target_data, dpd_model, pa_model, epochs=10000
             
     for epoch in range(epochs):
         optimizer.zero_grad()
-
+        # print(f"input_data.shape: {input_data.shape}")
         dpd_output = dpd_model.forward(input_data)
+        # print(f"dpd_output.shape: {dpd_output.shape}")
         pa_output = pa_model.forward(dpd_output)
+        # print(f"pa_output.shape: {pa_output.shape}")
 
         if add_noise:
             if snr is None or fs is None or bw is None:
@@ -87,3 +93,88 @@ def ilc_signal_grad(input_data, target_data, pa_model, epochs=1000000, learning_
 
     return u.detach()
 
+def model_train(model: nn.Module,
+              dataloader: DataLoader,
+              optimizer: Optimizer,
+              criterion: Callable):
+    model.train()
+    losses = []
+    for features, targets in dataloader:
+        optimizer.zero_grad()
+        out = model(features)
+        loss = criterion(out, targets)
+        loss.backward()
+        optimizer.step()
+        loss.detach()
+        losses.append(loss.item())
+    loss = sum(losses) / len(losses)
+    return loss
+
+def model_eval(model: nn.Module,
+             dataloader: DataLoader,
+             criterion: Callable,
+             metric_criterion=None):
+    model.eval()
+    with torch.no_grad():
+        losses = []
+        if metric_criterion:
+            metric_losses = []
+        prediction = []
+        for features, targets in dataloader:
+            outputs = model(features)
+            loss = criterion(outputs, targets)
+            if metric_criterion:
+                metric_loss = metric_criterion(outputs, targets)
+                metric_losses.append(metric_loss.item())
+            prediction.append(outputs)
+            losses.append(loss.item())
+    avg_loss = sum(losses) / len(losses)
+    if metric_criterion:
+        avg_metric_loss = sum(metric_losses) / len(metric_losses)
+    prediction = torch.cat(prediction, dim=0)
+    if metric_criterion:
+        return avg_loss, avg_metric_loss
+    return avg_loss
+
+def model_inference(model: nn.Module, input_data: torch.Tensor):
+    model.eval()
+    with torch.no_grad():
+        predict = model(input_data)
+    return predict
+
+
+def model_train2(model: nn.Module,
+              input_data: torch.Tensor,
+              target_data: torch.Tensor,
+              optimizer: Optimizer,
+              criterion: Callable):
+    model.train()
+    optimizer.zero_grad()
+    out = model(input_data)
+    loss = criterion(out, target_data)
+    loss.backward()
+    optimizer.step()
+    loss.detach()
+    return loss
+
+def model_eval2(model: nn.Module,
+             input_data: torch.Tensor,
+             target_data: torch.Tensor,
+             criterion: Callable,
+             metric_criterion=None):
+    model.eval()
+    with torch.no_grad():
+        # if metric_criterion:
+        #     metric_losses = []
+        outputs = model(input_data)
+        loss = criterion(outputs, target_data)
+        if metric_criterion:
+            metric_loss = metric_criterion(outputs, target_data)
+            # metric_losses.append(metric_loss.item())
+       
+    # if metric_criterion:
+    #     avg_metric_loss = sum(metric_losses) / len(metric_losses)
+    # prediction = torch.cat(prediction, dim=0)
+    if metric_criterion:
+        return loss, metric_loss
+    return loss

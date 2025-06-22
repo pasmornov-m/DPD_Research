@@ -132,9 +132,6 @@ def noise_realizations(num_realizations, signal, y_target, snr, fs, bw, acpr_met
         acpr_right_values.append(acpr_right)
     return map(lambda x: sum(x) / num_realizations, (nmse_values, acpr_left_values, acpr_right_values))
 
-
-
-
 class ACPR:
     def __init__(
         self,

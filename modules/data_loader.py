@@ -1,8 +1,8 @@
 import torch
-from torch import nn
 from torch.utils.data import Dataset, DataLoader
 import polars as pl
 import json
+import numpy as np
 
 
 def load_csv_to_tensor(file_path):
@@ -56,35 +56,7 @@ class SequenceDataset(Dataset):
         return x, y
 
 def make_dataloader(iq_tensor, target_tensor,
-                    window_size, stride,
-                    batch_size=64, shuffle=True, num_workers=0):
-    ds = SequenceDataset(iq_tensor, target_tensor, window_size, stride)
-    return DataLoader(ds, batch_size=batch_size, shuffle=shuffle,
-                      num_workers=num_workers, pin_memory=True)
-
-
-# 4) Пример цикла train / eval
-def train_epoch(model: nn.Module, loader: DataLoader,
-                optimizer, criterion):
-    model.train()
-    total_loss = 0.0
-    for xb, yb in loader:
-        optimizer.zero_grad()
-        out = model(xb)
-        loss = criterion(out, yb)
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item() * xb.size(0)
-    return total_loss / len(loader.dataset)
-
-
-def eval_epoch(model: nn.Module, loader: DataLoader,
-               criterion):
-    model.eval()
-    total_loss = 0.0
-    with torch.no_grad():
-        for xb, yb in loader:
-            out = model(xb)
-            loss = criterion(out, yb)
-            total_loss += loss.item() * xb.size(0)
-    return total_loss / len(loader.dataset)
+                    window_size,
+                    batch_size=64, shuffle=True):
+    ds = SequenceDataset(iq_tensor, target_tensor, window_size)
+    return DataLoader(ds, batch_size=batch_size, shuffle=shuffle)
