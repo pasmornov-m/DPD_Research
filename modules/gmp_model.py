@@ -36,7 +36,7 @@ class GMP(nn.Module):
         y = self._compute_terms(x)
         return y
 
-    def optimize_coefficients_grad(self, input_data, target_data, epochs=100000, learning_rate=0.01, acpr_meter=None):
+    def optimize_weights(self, input_data, target_data, epochs=100000, learning_rate=0.01, acpr_meter=None):
         input_data, target_data = map(to_torch_tensor, (input_data, target_data))
 
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, amsgrad=True)
@@ -51,14 +51,14 @@ class GMP(nn.Module):
                 print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
     
 
-    def save_coefficients(self, directory="model_params"):
+    def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
         filename = f"{directory}/{self.model_type}_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}.pt"
         torch.save(self.state_dict(), filename)
         print(f"Coefficients saved to {filename}")
 
 
-    def load_coefficients(self, directory="model_params"):
+    def load_weights(self, directory="model_params"):
         filename = f"{directory}/{self.model_type}_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}.pt"
         if os.path.isfile(filename):
             state_dict = torch.load(filename)

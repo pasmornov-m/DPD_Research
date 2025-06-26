@@ -36,7 +36,7 @@ class TextHandler(logging.Handler):
 class FSMGUI(tk.Tk):
     def __init__(self, data_path):
         super().__init__()
-        self.title("PA & DPD FSM")
+        self.title("GMP DPD")
         self.geometry("1000x1000")
         self.fsm = PA_DPD_FSM(data_path, gui=self)
 

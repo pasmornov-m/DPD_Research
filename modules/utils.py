@@ -32,27 +32,6 @@ def iq_to_complex(iq_signal):
 def complex_to_iq(complex_signal):
     return torch.view_as_real(complex_signal)
 
-def create_sequences1(iq_data, target, window_size):
-    X, Y = [], []
-    for i in range(len(iq_data) - window_size):
-        X.append(iq_data[i:i+window_size])
-        Y.append(target[i+window_size])
-    return torch.stack(X), torch.stack(Y)
-
-def create_sequences(iq_data, target, nperseg):
-    num_samples = iq_data.shape[0]
-    X, Y = [], []
-    for i in range(0, num_samples, nperseg):
-        segment = iq_data[i:i + nperseg]
-        if segment.shape[0] < nperseg:
-            pad = torch.zeros((nperseg - segment.shape[0], iq_data.shape[1]), device=iq_data.device)
-            segment = torch.vstack([segment, pad])
-        X.append(segment)
-
-        target_idx = min(i + nperseg - 1, target.shape[0] - 1)
-        Y.append(target[target_idx])
-    
-    return torch.stack(X), torch.stack(Y)
 
 def complex_handler(forward_func):
     """Декоратор для автоматической обработки комплексных чисел в методах forward"""
@@ -62,14 +41,14 @@ def complex_handler(forward_func):
 
         if is_complex:
             x = complex_to_iq(input_x)
-            x = x.unsqueeze(1)
+            x = x.unsqueeze(0)
         else:
             x = input_x
         
         y = forward_func(self, x, *args, **kwargs)
         
         if is_complex:
-            y = y.squeeze(0)
+            y = torch.squeeze(y)
             y = iq_to_complex(y)
         
         return y

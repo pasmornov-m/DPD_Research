@@ -4,9 +4,7 @@ import threading
 import numpy as np
 import matplotlib.pyplot as plt
 from modules import data_loader, metrics, learning, params
-from modules.snr_range_metrics import snr_metrics
 from modules.gmp_model import GMP
-from modules.params import ModelParams
 
 
 DPI = 100
@@ -84,12 +82,12 @@ class PA_DPD_FSM:
         self.data_params = None
 
         # PA
-        self.pa_params: ModelParams = None
+        self.pa_params: params.ModelParams = None
         self.pa_model = None
         self.nmse_pa = None
 
         # DPD
-        self.dpd_params: ModelParams = None
+        self.dpd_params: params.ModelParams = None
         self.dpd_archs = ["DLA", "ILA", "ILC"]
         self.current_arch = None
         self.current_arch_index = 0
@@ -106,11 +104,11 @@ class PA_DPD_FSM:
         logger.info("PA_DPD_FSM initialized with data_path=%s", data_path)
 
     # --- интерфейс от GUI ---
-    def set_pa_params(self, params: ModelParams):
+    def set_pa_params(self, params: params.ModelParams):
         self.pa_params = params
         logger.info("PA params set: %s", params)
 
-    def set_dpd_params(self, params: ModelParams):
+    def set_dpd_params(self, params: params.ModelParams):
         self.dpd_params = params
         logger.info("DPD params set: %s", params)
 
@@ -275,7 +273,7 @@ class PA_DPD_FSM:
 
         self.pa_model = GMP(**pa_config)
 
-        if not self.pa_model.load_coefficients():
+        if not self.pa_model.load_weights():
             logger.info("   Нет сохранённых весов PA: перейдем к TRAIN_PA")
             self.state = FSM_State.TRAIN_PA
         else:
@@ -290,8 +288,8 @@ class PA_DPD_FSM:
         if self._stop_event.is_set():
             return
         
-        self.pa_model.optimize_coefficients_grad(self.x_train, self.y_train, epochs=self.pa_params.epochs, learning_rate=self.pa_params.lr)
-        self.pa_model.save_coefficients()
+        self.pa_model.optimize_weights(self.x_train, self.y_train, epochs=self.pa_params.epochs, learning_rate=self.pa_params.lr)
+        self.pa_model.save_weights()
 
         y_pa = self.pa_model.forward(self.x_val).detach()
         self.nmse_pa = metrics.compute_nmse(y_pa, self.y_val)
@@ -363,7 +361,7 @@ class PA_DPD_FSM:
                                                 )
             model = GMP(**dpd_config)
 
-            if not model.load_coefficients():
+            if not model.load_weights():
                 logger.info("   Нет сохранённых весов для %s: перейдем к TRAIN_DPD", arch)
                 self.current_arch = arch
                 self.current_arch_index = i
@@ -382,7 +380,7 @@ class PA_DPD_FSM:
         self._pause_event.wait()
 
         logger.info("   CONFIGURE_DPD: вычисление u_k для ILC на чистых данных")
-        self.u_k = learning.ilc_signal_grad(
+        self.u_k = learning.ilc_signal(
             self.x_train, self.y_train_target, self.pa_model,
             epochs=U_K_EPOCHS, learning_rate=U_K_LR
         )
@@ -405,18 +403,18 @@ class PA_DPD_FSM:
         logger.info("STATE TRAIN_DPD: обучение архитектуры %s", arch)
 
         if arch == "DLA":
-            learning.optimize_dla_grad(self.x_train, self.y_train_target, model, self.pa_model, 
+            learning.optimize_dla(self.x_train, self.y_train_target, model, self.pa_model, 
                                        epochs=self.dpd_params.epochs, learning_rate=self.dpd_params.lr)
         elif arch == "ILA":
-            learning.optimize_ila_grad(model, self.x_train, self.y_train, self.gain, 
+            learning.optimize_ila(model, self.x_train, self.y_train, self.gain, 
                                        epochs=self.dpd_params.epochs, learning_rate=self.dpd_params.lr)
         elif arch == "ILC":
-            model.optimize_coefficients_grad(self.x_train, self.u_k,
+            model.optimize_weights(self.x_train, self.u_k,
                                              epochs=self.dpd_params.epochs, learning_rate=self.dpd_params.lr)
         else:
             logger.warning("Неизвестная архитектура %s в TRAIN_DPD", arch)
         
-        model.save_coefficients()
+        model.save_weights()
         logger.info("   %s обучена и сохранена", arch)
 
         if self._stop_event.is_set():
@@ -511,7 +509,7 @@ class PA_DPD_FSM:
             self._pause_event.wait()
 
             logger.info(f"   Оцениваем архитектуру {arch} через snr_metrics")
-            results = snr_metrics(
+            results = metrics.snr_metrics(
                 arch_name=arch,
                 gmp_params=gmp_base_config,
                 data_params=self.data_params,
