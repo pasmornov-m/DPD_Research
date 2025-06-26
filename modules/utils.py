@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+import functools
+
 
 def to_torch_tensor(data):
     return data if isinstance(data, torch.Tensor) else torch.tensor(data, dtype=torch.cfloat)
@@ -51,3 +53,24 @@ def create_sequences(iq_data, target, nperseg):
         Y.append(target[target_idx])
     
     return torch.stack(X), torch.stack(Y)
+
+def complex_handler(forward_func):
+    """Декоратор для автоматической обработки комплексных чисел в методах forward"""
+    @functools.wraps(forward_func)
+    def wrapper(self, input_x, *args, **kwargs):
+        is_complex = input_x.is_complex()
+
+        if is_complex:
+            x = complex_to_iq(input_x)
+            x = x.unsqueeze(1)
+        else:
+            x = input_x
+        
+        y = forward_func(self, x, *args, **kwargs)
+        
+        if is_complex:
+            y = y.squeeze(0)
+            y = iq_to_complex(y)
+        
+        return y
+    return wrapper

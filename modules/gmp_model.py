@@ -36,7 +36,7 @@ class GMP(nn.Module):
         y = self._compute_terms(x)
         return y
 
-    def optimize_coefficients_grad(self, input_data, target_data, epochs=100000, learning_rate=0.01):
+    def optimize_coefficients_grad(self, input_data, target_data, epochs=100000, learning_rate=0.01, acpr_meter=None):
         input_data, target_data = map(to_torch_tensor, (input_data, target_data))
 
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, amsgrad=True)
@@ -82,21 +82,21 @@ class GMP(nn.Module):
         indices_delayed_Mb = (indices_N.unsqueeze(1) - self.indices_Lb.unsqueeze(2) - self.indices_Mb).clamp(min=0, max=N-1)
         indices_delayed_Mc = (indices_N.unsqueeze(1) - self.indices_Lc.unsqueeze(2) + self.indices_Mc).clamp(min=0, max=N-1)
 
-        x_truncated_1a = x[indices_delayed_La]
-        x_truncated_1b = x[indices_delayed_Lb]
-        x_truncated_1c = x[indices_delayed_Lc]
+        x_truncated_La = x[indices_delayed_La]
+        x_truncated_Lb = x[indices_delayed_Lb]
+        x_truncated_Lc = x[indices_delayed_Lc]
 
-        x_truncated_2a = x[indices_delayed_Ma]
-        x_truncated_2b = x[indices_delayed_Mb]
-        x_truncated_2c = x[indices_delayed_Mc]
+        x_truncated_Ma = x[indices_delayed_Ma]
+        x_truncated_Mb = x[indices_delayed_Mb]
+        x_truncated_Mc = x[indices_delayed_Mc]
 
-        abs_powers_a = (torch.abs(x_truncated_2a).unsqueeze(-1) ** self.powers_Ka).to(x.dtype)
-        abs_powers_b = (torch.abs(x_truncated_2b).unsqueeze(-1) ** self.powers_Kb).to(x.dtype)
-        abs_powers_c = (torch.abs(x_truncated_2c).unsqueeze(-1) ** self.powers_Kc).to(x.dtype)
+        abs_powers_a = (torch.abs(x_truncated_Ma).unsqueeze(-1) ** self.powers_Ka).to(x.dtype)
+        abs_powers_b = (torch.abs(x_truncated_Mb).unsqueeze(-1) ** self.powers_Kb).to(x.dtype)
+        abs_powers_c = (torch.abs(x_truncated_Mc).unsqueeze(-1) ** self.powers_Kc).to(x.dtype)
 
-        x_scaled_a = x_truncated_1a.unsqueeze(-1) * abs_powers_a
-        x_scaled_b = x_truncated_1b.unsqueeze(1).unsqueeze(-1) * abs_powers_b
-        x_scaled_c = x_truncated_1c.unsqueeze(1).unsqueeze(-1) * abs_powers_c
+        x_scaled_a = x_truncated_La.unsqueeze(-1) * abs_powers_a
+        x_scaled_b = x_truncated_Lb.unsqueeze(1).unsqueeze(-1) * abs_powers_b
+        x_scaled_c = x_truncated_Lc.unsqueeze(1).unsqueeze(-1) * abs_powers_c
 
         term_a = torch.einsum('kln,lnk->n', self.a.unsqueeze(-1), x_scaled_a)
         term_b = torch.einsum('klm,lmnk->n', self.b, x_scaled_b)
