@@ -88,7 +88,9 @@ def build_dataloaders(data_dict, frame_length, batch_size, batch_size_eval, arch
     nperseg = data_dict["config"]["nperseg"]
 
     x_train = utils.complex_to_iq(data_dict["train_input"])
+    y_train = utils.complex_to_iq(data_dict["train_output"])
     x_val = utils.complex_to_iq(data_dict["val_input"])
+    y_val = utils.complex_to_iq(data_dict["val_output"])
 
     if arch == "dla":
         gain = metrics.calculate_gain_complex(x_train, y_train)

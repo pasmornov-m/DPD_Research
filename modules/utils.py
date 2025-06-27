@@ -53,3 +53,15 @@ def complex_handler(forward_func):
         
         return y
     return wrapper
+
+
+class noise_model():
+    def __init__(self, snr, fs, bw):
+        self.snr = snr
+        self.fs = fs
+        self.bw = bw
+    
+    def __call__(self, signal):
+        import metrics
+        output = metrics.add_complex_noise(signal, self.snr, self.fs, self.bw)
+        return output

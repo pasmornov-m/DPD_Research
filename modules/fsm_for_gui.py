@@ -509,7 +509,7 @@ class PA_DPD_FSM:
             self._pause_event.wait()
 
             logger.info(f"   Оцениваем архитектуру {arch} через snr_metrics")
-            results = metrics.snr_metrics(
+            results = metrics.gmp_snr_metrics(
                 arch_name=arch,
                 gmp_params=gmp_base_config,
                 data_params=self.data_params,

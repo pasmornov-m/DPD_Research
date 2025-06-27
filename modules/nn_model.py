@@ -5,26 +5,26 @@ from modules import utils
 
 
 class cascaded_model(nn.Module):
-    def __init__(self, dpd_model, pa_model, gain=None, cascade_type=None):
+    def __init__(self, model_1, model_2, gain=None, cascade_type=None):
         super().__init__()
-        self.dpd_model = dpd_model
-        self.pa_model = pa_model
+        self.model_1 = model_1
+        self.model_2 = model_2
         self.gain = gain
         self.cascade_type = cascade_type
         
         self.freeze_pa_model()
 
     def freeze_pa_model(self):
-        for param in self.pa_model.parameters():
+        for param in self.model_2.parameters():
             param.requires_grad = False
 
     def forward(self, x):
         if self.cascade_type == "dla":
-            x = self.dpd_model(x)
-            x = self.pa_model(x)
+            x = self.model_1(x)
+            x = self.model_2(x)
         elif self.cascade_type == "ila" and self.gain:
-            x = self.pa_model(x) / self.gain
-            x = self.dpd_model(x)
+            x = self.model_2(x) / self.gain
+            x = self.model_1(x)
         return x
 
 
