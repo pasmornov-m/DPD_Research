@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import os
-from modules.utils import to_torch_tensor
 from modules.metrics import compute_mse
+from modules import utils
 
 
 class GMP(nn.Module):
@@ -32,12 +32,12 @@ class GMP(nn.Module):
         number_of_params = (self.Ka*self.La)+(self.Kb*self.Lb*self.Mb)+(self.Kc*self.Lc*self.Mc)
         return number_of_params
 
+    @utils.iq_handler
     def forward(self, x):
         y = self._compute_terms(x)
         return y
 
     def optimize_weights(self, input_data, target_data, epochs=100000, learning_rate=0.01, acpr_meter=None):
-        input_data, target_data = map(to_torch_tensor, (input_data, target_data))
 
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, amsgrad=True)
         for epoch in range(epochs):

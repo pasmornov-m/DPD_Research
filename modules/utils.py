@@ -55,6 +55,22 @@ def complex_handler(forward_func):
         return y
     return wrapper
 
+def iq_handler(forward_func):
+    @functools.wraps(forward_func)
+    def wrapper(self, x, *args, **kwargs):
+        is_reshape = (x.ndim >= 3 and x.shape[-1] == 2 and x.dtype == torch.float32)
+        if is_reshape:
+            x = torch.squeeze(x)
+            x_complex = iq_to_complex(x)
+        else:
+            x_complex = x
+        y = forward_func(self, x_complex, *args, **kwargs)
+        if is_reshape:
+            y = y.unsqueeze(1)
+            y = complex_to_iq(y)
+        return y
+    return wrapper
+
 
 class NoiseModel():
     def __init__(self, snr, fs, bw):

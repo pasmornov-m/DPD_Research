@@ -133,9 +133,9 @@ def train(net,
           optimizer,
           train_loader, 
           val_loader, 
-          grad_clip_val,
           n_epochs,
-          metric_criterion):
+          metric_criterion,
+          grad_clip_val=0):
     print("===Start training===")
     for epoch in range(n_epochs):
         net, train_loss = net_train(net=net,
