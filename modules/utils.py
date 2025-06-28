@@ -1,4 +1,5 @@
 import torch
+from torch import nn
 import numpy as np
 import functools
 
@@ -55,13 +56,33 @@ def complex_handler(forward_func):
     return wrapper
 
 
-class noise_model():
+class NoiseModel():
     def __init__(self, snr, fs, bw):
         self.snr = snr
         self.fs = fs
         self.bw = bw
     
     def __call__(self, signal):
-        import metrics
+        from modules import metrics
         output = metrics.add_complex_noise(signal, self.snr, self.fs, self.bw)
         return output
+
+def freeze_pa_model(model):
+    for param in model.parameters():
+        param.requires_grad = False
+
+
+class CascadeModel(nn.Module):
+    def __init__(self, model_1, model_2, gain=None, cascade_type=None):
+        super().__init__()
+        self.model_1 = model_1
+        self.model_2 = model_2
+        self.gain = gain
+        self.cascade_type = cascade_type
+
+    def forward(self, x):
+        x = self.model_1(x)
+        if self.cascade_type == "ila" and self.gain:
+            x = x / self.gain
+        x = self.model_2(x)
+        return x

@@ -4,30 +4,6 @@ import os
 from modules import utils
 
 
-class cascaded_model(nn.Module):
-    def __init__(self, model_1, model_2, gain=None, cascade_type=None):
-        super().__init__()
-        self.model_1 = model_1
-        self.model_2 = model_2
-        self.gain = gain
-        self.cascade_type = cascade_type
-        
-        self.freeze_pa_model()
-
-    def freeze_pa_model(self):
-        for param in self.model_2.parameters():
-            param.requires_grad = False
-
-    def forward(self, x):
-        if self.cascade_type == "dla":
-            x = self.model_1(x)
-            x = self.model_2(x)
-        elif self.cascade_type == "ila" and self.gain:
-            x = self.model_2(x) / self.gain
-            x = self.model_1(x)
-        return x
-
-
 class GRU(nn.Module):
     def __init__(self, input_size=2, hidden_size=64, num_layers=1, output_size=2, bidirectional=False, batch_first=True, model_name=""):
         super().__init__()

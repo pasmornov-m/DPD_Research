@@ -2,7 +2,7 @@ import torch
 from torch.nn import MSELoss
 import numpy as np
 from scipy.signal import welch, get_window, lfilter
-from modules.utils import to_torch_tensor, iq_to_complex, noise_model
+from modules.utils import to_torch_tensor, iq_to_complex, NoiseModel, CascadeModel
 from modules import data_loader
 from typing import Dict
 
@@ -117,14 +117,47 @@ def calculate_acpr(input_data, acpr_meter):
     return acpr_vals
 
 
+# def add_complex_noise(signal, snr, fs, bw):
+#     # print(f"add_noise signal.shape: {signal.shape}")
+#     N = len(signal)
+#     snr_ln = 10 ** (snr/10)
+#     signal_var = compute_signal_power(signal)
+#     noise_var = torch.mean(signal_var / snr_ln * (fs/bw) * 0.5)
+#     noise = torch.sqrt(noise_var) * (torch.randn(N, dtype=signal.dtype) + 1j * torch.randn(N, dtype=signal.dtype))
+#     noise_signal = signal + noise
+#     return noise_signal
+
+
 def add_complex_noise(signal, snr, fs, bw):
-    N = len(signal)
-    snr_ln = 10 ** (snr/10)
-    signal_var = compute_signal_power(signal)
-    noise_var = torch.mean(signal_var / snr_ln * (fs/bw) * 0.5)
-    noise = torch.sqrt(noise_var) * (torch.randn(N, dtype=signal.dtype) + 1j * torch.randn(N, dtype=signal.dtype))
-    noise_signal = signal + noise
-    return noise_signal
+    """
+    Добавляет комплексный аддитивный шум к сигналу (в любом представлении).
+    Поддерживает:
+    - Комплексные тензоры: shape [...], dtype=torch.cfloat
+    - Ре/им тензоры: shape [..., 2], dtype=torch.float32
+
+    Возвращает сигнал в том же формате, что и входной.
+    """
+    snr_ln = 10 ** (snr / 10)
+
+    if signal.dtype == torch.float32 and signal.shape[-1] == 2:
+        is_real_im = True
+        signal_complex = signal[..., 0] + 1j * signal[..., 1]
+    elif signal.dtype.is_complex:
+        is_real_im = False
+        signal_complex = signal
+    else:
+        raise ValueError("Unsupported signal format")
+
+    power_signal = torch.mean(torch.abs(signal_complex) ** 2, dim=-1, keepdim=True)
+    noise_power = power_signal / snr_ln * (fs / bw) * 0.5
+
+    noise = torch.sqrt(noise_power) * (torch.randn_like(signal_complex) + 1j * torch.randn_like(signal_complex))
+    noisy = signal_complex + noise
+
+    if is_real_im:
+        return torch.stack((noisy.real, noisy.imag), dim=-1)
+    else:
+        return noisy
 
 
 def noise_realizations(num_realizations, signal, y_target, snr, fs, bw, acpr_meter):
@@ -139,7 +172,7 @@ def noise_realizations(num_realizations, signal, y_target, snr, fs, bw, acpr_met
 
 
 def noise_realizations2(num_realizations, model, x, y_target, acpr_meter):
-    import learning
+    from modules import learning
     
     nmse_values, acpr_left_values, acpr_right_values = [], [], []
     for _ in range(num_realizations):
@@ -426,12 +459,12 @@ def gmp_snr_metrics(arch_name: str,
 
 def nn_snr_metrics(arch_name: str,
                    nn_arch: str,
-                nn_params: Dict,
-                data_dict: Dict,
-                snr_params: Dict
-                ):
+                   nn_params: Dict,
+                   data_dict: Dict,
+                   snr_params: Dict
+                   ):
     from modules import learning
-    from modules.nn_model import cascaded_model, GRU
+    from modules.nn_model import GRU
     
     x_train = data_dict["train_input"]
     y_train = data_dict["train_output"]
@@ -450,8 +483,10 @@ def nn_snr_metrics(arch_name: str,
     pa_model = snr_params["pa_model"]
     gain = snr_params["gain"]
     
-    if nn_arch == "gru":
+    if nn_arch == "GRU":
         base_model = GRU
+    else:
+        raise ValueError(f"Unsupported architecture: {nn_arch}")
 
     results = {
         "snr_range": snr_range,
@@ -468,10 +503,18 @@ def nn_snr_metrics(arch_name: str,
         })
     
     frame_length = 64
-    batch_size = 128
+    batch_size = 64
     batch_size_eval = 1024
-    dla_train_loader, dla_val_loader = data_loader.build_dataloaders(data_dict=data_dict, frame_length=frame_length, batch_size=batch_size, batch_size_eval=batch_size_eval, arch="dla")
-    ila_train_loader, ila_val_loader = data_loader.build_dataloaders(data_dict=data_dict, frame_length=frame_length, batch_size=batch_size, batch_size_eval=batch_size_eval, arch="ila")
+    dla_train_loader, dla_val_loader = data_loader.build_dataloaders(data_dict=data_dict, 
+                                                                     frame_length=frame_length, 
+                                                                     batch_size=batch_size, 
+                                                                     batch_size_eval=batch_size_eval, 
+                                                                     arch="dla")
+    ila_train_loader, ila_val_loader = data_loader.build_dataloaders(data_dict=data_dict, 
+                                                                     frame_length=frame_length, 
+                                                                     batch_size=batch_size, 
+                                                                     batch_size_eval=batch_size_eval, 
+                                                                     arch="ila")
 
     criterion_gru = compute_mse
     metric_criterion = compute_nmse
@@ -483,9 +526,9 @@ def nn_snr_metrics(arch_name: str,
         if arch_name == "DLA":
             dpd_model = base_model(**nn_params)
             
-            noise_gen_model = noise_model(snr=snr, fs=fs, bw=bw_main_ch)
-            casc_pa_noise = cascaded_model(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
-            casc_gru_dla = cascaded_model(model_1=dpd_model, 
+            noise_gen_model = NoiseModel(snr=snr, fs=fs, bw=bw_main_ch)
+            casc_pa_noise = CascadeModel(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
+            casc_gru_dla = CascadeModel(model_1=dpd_model, 
                                           model_2=casc_pa_noise, 
                                           cascade_type="dla")
             optimizer_gru = torch.optim.Adam(casc_gru_dla.parameters(), lr=lr)
@@ -507,10 +550,10 @@ def nn_snr_metrics(arch_name: str,
         if arch_name == "ILA":
             dpd_model = base_model(**nn_params)
             
-            noise_gen_model = noise_model(snr=snr, fs=fs, bw=bw_main_ch)
-            casc_pa_noise = cascaded_model(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
-            casc_gru_ila_train = cascaded_model(model_1=dpd_model, model_2=casc_pa_noise, gain=gain, cascade_type="ila")
-            casc_gru_ila_eval = cascaded_model(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
+            noise_gen_model = NoiseModel(snr=snr, fs=fs, bw=bw_main_ch)
+            casc_pa_noise = CascadeModel(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
+            casc_gru_ila_train = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, gain=gain, cascade_type="ila")
+            casc_gru_ila_eval = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
             optimizer_gru = torch.optim.Adam(casc_gru_ila_train.parameters(), lr=lr)
 
             learning.train(net=casc_gru_ila_train, 
@@ -528,8 +571,8 @@ def nn_snr_metrics(arch_name: str,
             results["acpr_right"].append(acpr_right)
 
         if arch_name == "ILC":
-            noise_gen_model = noise_model(snr=snr, fs=fs, bw=bw_main_ch)
-            casc_pa_noise = cascaded_model(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
+            noise_gen_model = NoiseModel(snr=snr, fs=fs, bw=bw_main_ch)
+            casc_pa_noise = CascadeModel(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
             
             u_k_train = learning.ilc_signal(x_train, y_train_target, casc_pa_noise, epochs=u_k_epochs, learning_rate=u_k_lr)
             u_k_val = learning.ilc_signal(x_val, y_val_target, casc_pa_noise, epochs=u_k_epochs, learning_rate=u_k_lr)
@@ -559,7 +602,7 @@ def nn_snr_metrics(arch_name: str,
                         n_epochs=epochs, 
                         metric_criterion=metric_criterion)
 
-            casc_gru_ilc_eval = cascaded_model(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
+            casc_gru_ilc_eval = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
             # y_val_gru_ilc = learning.net_inference(net=casc_gru_ilc_eval, x=x_val)
             nmse, acpr_left, acpr_right = noise_realizations2(num_realizations, model=casc_gru_ilc_eval, x=x_val, y_target=y_val_target, acpr_meter=acpr_meter)
             # nmse, acpr_left, acpr_right = noise_realizations(num_realizations, y_val_gru_ilc, y_val_target, snr, fs, bw_main_ch, acpr_meter)
