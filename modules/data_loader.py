@@ -101,7 +101,8 @@ def build_dataloaders(data_dict, frame_length, batch_size, batch_size_eval, arch
         y_val = x_val
     elif arch == "ilc":
         y_train = utils.complex_to_iq(data_dict["ilc_train_output"])
-        y_val = utils.complex_to_iq(data_dict["ilc_val_output"])
+        # y_val = utils.complex_to_iq(data_dict["ilc_val_output"])
+        y_val = y_train
         
     train_set = IQDataset(x_train, y_train, nperseg=nperseg, frame_length=frame_length)
     val_set = IQDataset(x_val, y_val, nperseg=nperseg, frame_length=None)

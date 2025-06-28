@@ -28,7 +28,6 @@ class gmp_params:
     Kc: int
     Lc: int
     Mc: int
-    model_type: str
 
 def make_gmp_params(Ka: int,
                     La: int,
@@ -37,8 +36,8 @@ def make_gmp_params(Ka: int,
                     Mb: int,
                     Kc: int,
                     Lc: int,
-                    Mc: int,
-                    model_type: str):
+                    Mc: int
+                ):
     return asdict(gmp_params(
                 Ka=Ka,
                 La=La,
@@ -47,8 +46,7 @@ def make_gmp_params(Ka: int,
                 Mb=Mb,
                 Kc=Kc,
                 Lc=Lc,
-                Mc=Mc,
-                model_type=model_type
+                Mc=Mc
                 ))
 
 

@@ -1,5 +1,5 @@
 import torch
-from torch.nn import MSELoss
+from torch import nn
 import numpy as np
 from scipy.signal import welch, get_window, lfilter
 from modules.utils import to_torch_tensor, iq_to_complex, NoiseModel, CascadeModel
@@ -18,7 +18,7 @@ def compute_mse(x, y):
     if x.shape[-1] != 2:
         raise ValueError("Ожидается последний размер = 2 (I, Q)")
 
-    mse = MSELoss()
+    mse = nn.MSELoss()
     return mse(x, y)
 
 
@@ -160,18 +160,18 @@ def add_complex_noise(signal, snr, fs, bw):
         return noisy
 
 
-def noise_realizations(num_realizations, signal, y_target, snr, fs, bw, acpr_meter):
-    nmse_values, acpr_left_values, acpr_right_values = [], [], []
-    for _ in range(num_realizations):
-        y_noise = add_complex_noise(signal, snr, fs, bw)
-        nmse_values.append(compute_nmse(y_noise, y_target))
-        acpr_left, acpr_right = calculate_acpr(y_noise, acpr_meter)
-        acpr_left_values.append(acpr_left)
-        acpr_right_values.append(acpr_right)
-    return map(lambda x: sum(x) / num_realizations, (nmse_values, acpr_left_values, acpr_right_values))
+# def noise_realizations(num_realizations, signal, y_target, snr, fs, bw, acpr_meter):
+#     nmse_values, acpr_left_values, acpr_right_values = [], [], []
+#     for _ in range(num_realizations):
+#         y_noise = add_complex_noise(signal, snr, fs, bw)
+#         nmse_values.append(compute_nmse(y_noise, y_target))
+#         acpr_left, acpr_right = calculate_acpr(y_noise, acpr_meter)
+#         acpr_left_values.append(acpr_left)
+#         acpr_right_values.append(acpr_right)
+#     return map(lambda x: sum(x) / num_realizations, (nmse_values, acpr_left_values, acpr_right_values))
 
 
-def noise_realizations2(num_realizations, model, x, y_target, acpr_meter):
+def noise_realizations(num_realizations, model, x, y_target, acpr_meter):
     from modules import learning
     
     nmse_values, acpr_left_values, acpr_right_values = [], [], []
@@ -375,239 +375,469 @@ class ACPR:
         return tuple(outputs) if len(outputs) > 1 else acpr
 
 
-def gmp_snr_metrics(arch_name: str,
-                gmp_params: Dict,
-                data_dict: Dict,
-                snr_params: Dict
-                ):
-    from modules import learning
-    from modules.gmp_model import GMP
+# def gmp_snr_metrics(arch_name: str,
+#                 gmp_params: Dict,
+#                 data_dict: Dict,
+#                 snr_params: Dict
+#                 ):
+#     from modules import learning
+#     from modules.gmp_model import GMP
     
-    x_train = data_dict["x_train"]
-    y_train_target = data_dict["y_train_target"]
-    x_val = data_dict["x_val"]
-    y_val_target = data_dict["y_val_target"]
+#     x_train = data_dict["x_train"]
+#     y_train_target = data_dict["y_train_target"]
+#     x_val = data_dict["x_val"]
+#     y_val_target = data_dict["y_val_target"]
     
-    snr_range = snr_params["snr_range"]
-    num_realizations = snr_params["num_realizations"]
-    fs = snr_params["fs"]
-    bw_main_ch = snr_params["bw_main_ch"]
-    epochs = snr_params["epochs"]
-    lr = snr_params["learning_rate"]
-    acpr_meter = snr_params["acpr_meter"]
-    pa_model = snr_params["pa_model"]
-    gain = snr_params["gain"]
+#     snr_range = snr_params["snr_range"]
+#     num_realizations = snr_params["num_realizations"]
+#     fs = snr_params["fs"]
+#     bw_main_ch = snr_params["bw_main_ch"]
+#     epochs = snr_params["epochs"]
+#     lr = snr_params["learning_rate"]
+#     acpr_meter = snr_params["acpr_meter"]
+#     pa_model = snr_params["pa_model"]
+#     gain = snr_params["gain"]
 
-    results = {
-        "snr_range": snr_range,
-        "nmse": [],
-        "acpr_left": [],
-        "acpr_right": [],
-    }
+#     results = {
+#         "snr_range": snr_range,
+#         "nmse": [],
+#         "acpr_left": [],
+#         "acpr_right": [],
+#     }
 
-    if arch_name == "ILC":
-        results.update({
-            "nmse_uk": [],
-            "acpr_left_uk": [],
-            "acpr_right_uk": []
-        })
+#     if arch_name == "ILC":
+#         results.update({
+#             "nmse_uk": [],
+#             "acpr_left_uk": [],
+#             "acpr_right_uk": []
+#         })
 
-    for snr in snr_range:
-        print(f"Current SNR: {snr}")
-        if arch_name == "DLA":
-            dpd_model = GMP(**gmp_params)
+#     for snr in snr_range:
+#         print(f"Current SNR: {snr}")
+#         if arch_name == "DLA":
+#             dpd_model = GMP(**gmp_params)
 
-            learning.optimize_dla(x_train, y_train_target, dpd_model, pa_model, epochs, lr, add_noise=True, snr=snr, fs=fs, bw=bw_main_ch)
-            y_dla_pa = pa_model.forward(dpd_model.forward(x_val)).detach()
+#             learning.optimize_dla(x_train, y_train_target, dpd_model, pa_model, epochs, lr, add_noise=True, snr=snr, fs=fs, bw=bw_main_ch)
+#             y_dla_pa = pa_model.forward(dpd_model.forward(x_val)).detach()
 
-            nmse, acpr_left, acpr_right = noise_realizations(num_realizations, y_dla_pa, y_val_target, snr, fs, bw_main_ch, acpr_meter)
-            results["nmse"].append(nmse)
-            results["acpr_left"].append(acpr_left)
-            results["acpr_right"].append(acpr_right)
+#             nmse, acpr_left, acpr_right = noise_realizations(num_realizations, y_dla_pa, y_val_target, snr, fs, bw_main_ch, acpr_meter)
+#             results["nmse"].append(nmse)
+#             results["acpr_left"].append(acpr_left)
+#             results["acpr_right"].append(acpr_right)
 
-        if arch_name == "ILA":
-            dpd_model = GMP(**gmp_params)
-            learning.optimize_ila(dpd_model, x_train, y_train_target, gain, epochs, lr, pa_model, add_noise=True, snr=snr, fs=fs, bw=bw_main_ch)
-            y_ila_pa = pa_model.forward(dpd_model.forward(x_val)).detach()
+#         if arch_name == "ILA":
+#             dpd_model = GMP(**gmp_params)
+#             learning.optimize_ila(dpd_model, x_train, y_train_target, gain, epochs, lr, pa_model, add_noise=True, snr=snr, fs=fs, bw=bw_main_ch)
+#             y_ila_pa = pa_model.forward(dpd_model.forward(x_val)).detach()
 
-            nmse, acpr_left, acpr_right = noise_realizations(num_realizations, y_ila_pa, y_val_target, snr, fs, bw_main_ch, acpr_meter)
-            results["nmse"].append(nmse)
-            results["acpr_left"].append(acpr_left)
-            results["acpr_right"].append(acpr_right)
+#             nmse, acpr_left, acpr_right = noise_realizations(num_realizations, y_ila_pa, y_val_target, snr, fs, bw_main_ch, acpr_meter)
+#             results["nmse"].append(nmse)
+#             results["acpr_left"].append(acpr_left)
+#             results["acpr_right"].append(acpr_right)
 
-        if arch_name == "ILC":
-            dpd_model = GMP(**gmp_params)
-            uk = learning.ilc_signal(x_train, y_train_target, pa_model, 1000, 0.001, add_noise=True, snr=snr, fs=fs, bw=bw_main_ch)
+#         if arch_name == "ILC":
+#             dpd_model = GMP(**gmp_params)
+#             uk = learning.ilc_signal(x_train, y_train_target, pa_model, 1000, 0.001, add_noise=True, snr=snr, fs=fs, bw=bw_main_ch)
             
-            uk_pa = pa_model.forward(uk).detach()
-            nmse_uk, acpr_left_uk, acpr_right_uk = noise_realizations(num_realizations, uk_pa, y_train_target, snr, fs, bw_main_ch, acpr_meter)
-            results["nmse_uk"].append(nmse_uk)
-            results["acpr_left_uk"].append(acpr_left_uk)
-            results["acpr_right_uk"].append(acpr_right_uk)
+#             uk_pa = pa_model.forward(uk).detach()
+#             nmse_uk, acpr_left_uk, acpr_right_uk = noise_realizations(num_realizations, uk_pa, y_train_target, snr, fs, bw_main_ch, acpr_meter)
+#             results["nmse_uk"].append(nmse_uk)
+#             results["acpr_left_uk"].append(acpr_left_uk)
+#             results["acpr_right_uk"].append(acpr_right_uk)
 
-            dpd_model.optimize_weights(x_train, uk, epochs, lr)
-            y_ilc_pa = pa_model.forward(dpd_model.forward(x_val)).detach()
+#             dpd_model.optimize_weights(x_train, uk, epochs, lr)
+#             y_ilc_pa = pa_model.forward(dpd_model.forward(x_val)).detach()
             
-            nmse, acpr_left, acpr_right = noise_realizations(num_realizations, y_ilc_pa, y_val_target, snr, fs, bw_main_ch, acpr_meter)
-            results["nmse"].append(nmse)
-            results["acpr_left"].append(acpr_left)
-            results["acpr_right"].append(acpr_right)
+#             nmse, acpr_left, acpr_right = noise_realizations(num_realizations, y_ilc_pa, y_val_target, snr, fs, bw_main_ch, acpr_meter)
+#             results["nmse"].append(nmse)
+#             results["acpr_left"].append(acpr_left)
+#             results["acpr_right"].append(acpr_right)
 
-    return results
+#     return results
 
 
 
-def nn_snr_metrics(arch_name: str,
-                   nn_arch: str,
-                   nn_params: Dict,
-                   data_dict: Dict,
-                   snr_params: Dict
-                   ):
-    from modules import learning
-    from modules.nn_model import GRU
-    
-    x_train = data_dict["train_input"]
-    y_train = data_dict["train_output"]
-    x_val = data_dict["val_input"]
-    y_val = data_dict["val_output"]
-    y_train_target = data_dict['y_train_target']
-    y_val_target = data_dict['y_val_target']
+# def snr_metrics(arch_name: str,
+#                    base_model_cls: nn.Module,
+#                    model_params: Dict,
+#                    data_dict: Dict,
+#                    snr_params: Dict
+#                    ):
+#     from modules import learning
+#     from modules.gmp_model import GMP
+#     from modules.nn_model import GRU
+
+#     x_train = data_dict["train_input"]
+#     y_train = data_dict["train_output"]
+#     x_val = data_dict["val_input"]
+#     y_val = data_dict["val_output"]
+#     y_train_target = data_dict['y_train_target']
+#     y_val_target = data_dict['y_val_target']
         
-    snr_range = snr_params["snr_range"]
-    num_realizations = snr_params["num_realizations"]
-    fs = snr_params["fs"]
-    bw_main_ch = snr_params["bw_main_ch"]
-    epochs = snr_params["epochs"]
-    lr = snr_params["learning_rate"]
-    acpr_meter = snr_params["acpr_meter"]
-    pa_model = snr_params["pa_model"]
-    gain = snr_params["gain"]
+#     snr_range = snr_params["snr_range"]
+#     num_realizations = snr_params["num_realizations"]
+#     fs = snr_params["fs"]
+#     bw_main_ch = snr_params["bw_main_ch"]
+#     epochs = snr_params["epochs"]
+#     lr = snr_params["learning_rate"]
+#     acpr_meter = snr_params["acpr_meter"]
+#     pa_model = snr_params["pa_model"]
+#     gain = snr_params["gain"]
+
+
+#     results = {
+#         "snr_range": snr_range,
+#         "nmse": [],
+#         "acpr_left": [],
+#         "acpr_right": [],
+#     }
+
+#     if arch_name == "ILC":
+#         results.update({
+#             "nmse_uk": [],
+#             "acpr_left_uk": [],
+#             "acpr_right_uk": []
+#         })
     
-    if nn_arch == "GRU":
-        base_model = GRU
-    else:
-        raise ValueError(f"Unsupported architecture: {nn_arch}")
+#     if base_model_cls is GMP:
+#         dla_train_loader = [(x_train, y_train_target)]
+#         dla_val_loader = [(x_val, y_val_target)]
+#         ila_train_loader = [(x_train, x_train)]
+#         ila_val_loader = [(x_val, x_val)]
+#         grad_clip_val = 0
+#         u_k_lr=0.001
+#         u_k_epochs=1000
+#     else:
+#         frame_length = 64
+#         batch_size = 64
+#         batch_size_eval = 1024
+#         dla_train_loader, dla_val_loader = data_loader.build_dataloaders(data_dict=data_dict, 
+#                                                                         frame_length=frame_length, 
+#                                                                         batch_size=batch_size, 
+#                                                                         batch_size_eval=batch_size_eval, 
+#                                                                         arch="dla")
+#         ila_train_loader, ila_val_loader = data_loader.build_dataloaders(data_dict=data_dict, 
+#                                                                         frame_length=frame_length, 
+#                                                                         batch_size=batch_size, 
+#                                                                         batch_size_eval=batch_size_eval, 
+#                                                                         arch="ila")
+#         grad_clip_val = 1.0
+#         u_k_lr = 0.1
+#         u_k_epochs = 200
 
-    results = {
-        "snr_range": snr_range,
-        "nmse": [],
-        "acpr_left": [],
-        "acpr_right": [],
-    }
+#     criterion = compute_mse
+#     metric_criterion = compute_nmse
 
-    if arch_name == "ILC":
-        results.update({
-            "nmse_uk": [],
-            "acpr_left_uk": [],
-            "acpr_right_uk": []
-        })
+
+#     for snr in snr_range:
+#         print(f"Current SNR: {snr}")
+#         if arch_name == "DLA":
+#             dpd_model = base_model_cls(**model_params)
+            
+#             noise_gen_model = NoiseModel(snr=snr, fs=fs, bw=bw_main_ch)
+#             casc_pa_noise = CascadeModel(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
+#             casc_dla = CascadeModel(model_1=dpd_model, 
+#                                           model_2=casc_pa_noise, 
+#                                           cascade_type="dla")
+#             optimizer = torch.optim.Adam(casc_dla.parameters(), lr=lr)
+
+#             learning.train(net=casc_dla, 
+#                         criterion=criterion, 
+#                         optimizer=optimizer, 
+#                         train_loader=dla_train_loader, 
+#                         val_loader=dla_val_loader, 
+#                         grad_clip_val=grad_clip_val, 
+#                         n_epochs=epochs, 
+#                         metric_criterion=metric_criterion)
+
+#             nmse, acpr_left, acpr_right = noise_realizations(num_realizations, model=casc_dla, x=x_val, y_target=y_val_target, acpr_meter=acpr_meter)
+#             results["nmse"].append(nmse)
+#             results["acpr_left"].append(acpr_left)
+#             results["acpr_right"].append(acpr_right)
+
+#         if arch_name == "ILA":
+#             dpd_model = base_model_cls(**model_params)
+            
+#             noise_gen_model = NoiseModel(snr=snr, fs=fs, bw=bw_main_ch)
+#             casc_pa_noise = CascadeModel(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
+#             casc_ila_train = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, gain=gain, cascade_type="ila")
+#             casc_ila_eval = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
+#             optimizer = torch.optim.Adam(casc_ila_train.parameters(), lr=lr)
+
+#             learning.train(net=casc_ila_train, 
+#                         criterion=criterion, 
+#                         optimizer=optimizer, 
+#                         train_loader=ila_train_loader, 
+#                         val_loader=ila_val_loader, 
+#                         grad_clip_val=grad_clip_val, 
+#                         n_epochs=epochs, 
+#                         metric_criterion=metric_criterion)
+
+#             nmse, acpr_left, acpr_right = noise_realizations(num_realizations, model=casc_ila_eval, x=x_val, y_target=y_val_target, acpr_meter=acpr_meter)
+#             results["nmse"].append(nmse)
+#             results["acpr_left"].append(acpr_left)
+#             results["acpr_right"].append(acpr_right)
+
+#         if arch_name == "ILC":
+#             noise_gen_model = NoiseModel(snr=snr, fs=fs, bw=bw_main_ch)
+#             casc_pa_noise = CascadeModel(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
+            
+#             u_k_train = learning.ilc_signal(x_train, y_train_target, casc_pa_noise, epochs=u_k_epochs, learning_rate=u_k_lr)
+#             u_k_val = learning.ilc_signal(x_val, y_val_target, casc_pa_noise, epochs=u_k_epochs, learning_rate=u_k_lr)
+#             u_k_pa = casc_pa_noise.forward(u_k_val).detach()
+
+#             data_dict["ilc_train_output"] = u_k_train
+#             data_dict["ilc_val_output"] = u_k_val
+            
+#             if base_model_cls is GMP:
+#                 ilc_train_loader = [(x_train, u_k_train)]
+#                 ilc_val_loader = [(x_val, u_k_val)]
+#             else:
+#                 ilc_train_loader, ilc_val_loader = data_loader.build_dataloaders(data_dict=data_dict, 
+#                                                                                 frame_length=frame_length, 
+#                                                                                 batch_size=batch_size, 
+#                                                                                 batch_size_eval=batch_size_eval, 
+#                                                                                 arch="ilc")
+#             nmse_uk, acpr_left_uk, acpr_right_uk = noise_realizations(num_realizations, model=casc_pa_noise, x=u_k_val, y_target=y_val_target, acpr_meter=acpr_meter)
+#             results["nmse_uk"].append(nmse_uk)
+#             results["acpr_left_uk"].append(acpr_left_uk)
+#             results["acpr_right_uk"].append(acpr_right_uk)
+
+#             dpd_model = base_model_cls(**model_params)
+#             optimizer = torch.optim.Adam(dpd_model.parameters(), lr=lr, weight_decay=1e-7)
+#             learning.train(net=dpd_model, 
+#                         criterion=criterion, 
+#                         optimizer=optimizer, 
+#                         train_loader=ilc_train_loader, 
+#                         val_loader=ilc_val_loader, 
+#                         grad_clip_val=grad_clip_val, 
+#                         n_epochs=epochs, 
+#                         metric_criterion=metric_criterion)
+
+#             casc_ilc_eval = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
+#             nmse, acpr_left, acpr_right = noise_realizations(num_realizations, model=casc_ilc_eval, x=x_val, y_target=y_val_target, acpr_meter=acpr_meter)
+#             results["nmse"].append(nmse)
+#             results["acpr_left"].append(acpr_left)
+#             results["acpr_right"].append(acpr_right)
+
+#     return results
+
+
+class SNRMetricsRunner:
+    def __init__(self,
+                 base_model_cls: nn.Module,
+                 model_params: Dict,
+                 data_dict: Dict,
+                 snr_params: Dict):
+        
+        self.base_model_cls = base_model_cls
+        self.model_params = model_params
+        self.data_dict = data_dict
+        self.snr_params = snr_params
+
+        self.x_train = data_dict["train_input"]
+        self.y_train = data_dict["train_output"]
+        self.x_val = data_dict["val_input"]
+        self.y_val = data_dict["val_output"]
+        self.y_train_target = data_dict['y_train_target']
+        self.y_val_target = data_dict['y_val_target']
+        self.u_k_train = None
+        self.u_k_val = None
+            
+        self.snr_range = snr_params["snr_range"]
+        self.num_realizations = snr_params["num_realizations"]
+        self.fs = snr_params["fs"]
+        self.bw_main_ch = snr_params["bw_main_ch"]
+        self.epochs = snr_params["epochs"]
+        self.lr = snr_params["learning_rate"]
+        self.acpr_meter = snr_params["acpr_meter"]
+        self.pa_model = snr_params["pa_model"]
+        self.gain = snr_params["gain"]
+        
+        self.results = {
+            "dla": {"nmse": [], "acpr_left": [], "acpr_right": []},
+            "ila": {"nmse": [], "acpr_left": [], "acpr_right": []},
+            "ilc": {"nmse": [], "acpr_left": [], "acpr_right": []},
+            "uk":  {"nmse": [], "acpr_left": [], "acpr_right": []},
+            "snr_range": self.snr_range,
+            "base_model_cls": self.base_model_cls
+        }
+        
+        self.criterion = compute_mse
+        self.metric_criterion = compute_nmse
+        
+        self.frame_length = None
+        self.batch_size = None
+        self.batch_size_eval = None
+        self.grad_clip_val = None
+        self.u_k_lr = None
+        self.u_k_epochs = None
+        
+        self.dla_train_loader = None
+        self.dla_val_loader = None
+        self.ila_train_loader = None
+        self.ila_val_loader = None
+        self.ilc_train_loader = None
+        self.ilc_val_loader = None
+
+        self._prepare_params()
+        self._prepare_loaders()
     
-    frame_length = 64
-    batch_size = 64
-    batch_size_eval = 1024
-    dla_train_loader, dla_val_loader = data_loader.build_dataloaders(data_dict=data_dict, 
-                                                                     frame_length=frame_length, 
-                                                                     batch_size=batch_size, 
-                                                                     batch_size_eval=batch_size_eval, 
-                                                                     arch="dla")
-    ila_train_loader, ila_val_loader = data_loader.build_dataloaders(data_dict=data_dict, 
-                                                                     frame_length=frame_length, 
-                                                                     batch_size=batch_size, 
-                                                                     batch_size_eval=batch_size_eval, 
-                                                                     arch="ila")
+    def _prepare_params(self):
+        if self.base_model_cls.__name__ == "GMP":
+            self.grad_clip_val = 0
+            self.u_k_lr=0.001
+            self.u_k_epochs=1000
+        else:
+            self.frame_length = 16
+            self.batch_size = 256
+            self.batch_size_eval = 2048
+            self.grad_clip_val = 1.0
+            self.u_k_lr = 0.1
+            self.u_k_epochs = 200
+    
+    def _prepare_loaders(self):
+        if self.base_model_cls.__name__ == "GMP":
+            self.dla_train_loader = [(self.x_train, self.y_train_target)]
+            self.dla_val_loader = [(self.x_val, self.y_val_target)]
+            self.ila_train_loader = [(self.x_train, self.x_train)]
+            self.ila_val_loader = [(self.x_val, self.x_val)]
+        else:
+            self.dla_train_loader, self.dla_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+                                                                            frame_length=self.frame_length, 
+                                                                            batch_size=self.batch_size, 
+                                                                            batch_size_eval=self.batch_size_eval, 
+                                                                            arch="dla")
+            self.ila_train_loader, self.ila_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+                                                                            frame_length=self.frame_length, 
+                                                                            batch_size=self.batch_size, 
+                                                                            batch_size_eval=self.batch_size_eval, 
+                                                                            arch="ila")
+    def _create_pa_noise_cascade(self, snr):
+        noise_gen_model = NoiseModel(snr=snr, fs=self.fs, bw=self.bw_main_ch)
+        casc_pa_noise = CascadeModel(model_1=self.pa_model, model_2=noise_gen_model, cascade_type="dla")
+        return casc_pa_noise
+    
+    def _dla_arch_with_noise(self):
+        from modules import learning
+        
+        for snr in self.snr_range:
+            print(f"SNR: {snr}")
+            dpd_model = self.base_model_cls(**self.model_params)
+            casc_pa_noise = self._create_pa_noise_cascade(snr)
+            casc_dla = CascadeModel(model_1=dpd_model, 
+                                            model_2=casc_pa_noise, 
+                                            cascade_type="dla")
+            optimizer = torch.optim.Adam(casc_dla.parameters(), lr=self.lr)
 
-    criterion_gru = compute_mse
-    metric_criterion = compute_nmse
-    u_k_lr = 0.1
-    u_k_epochs = 200
+            learning.train(net=casc_dla, 
+                        criterion=self.criterion, 
+                        optimizer=optimizer, 
+                        train_loader=self.dla_train_loader, 
+                        val_loader=self.dla_val_loader, 
+                        grad_clip_val=self.grad_clip_val, 
+                        n_epochs=self.epochs, 
+                        metric_criterion=self.metric_criterion)
 
-    for snr in snr_range:
-        print(f"Current SNR: {snr}")
-        if arch_name == "DLA":
-            dpd_model = base_model(**nn_params)
+            nmse, acpr_left, acpr_right = noise_realizations(self.num_realizations, 
+                                                            model=casc_dla, 
+                                                            x=self.x_val, 
+                                                            y_target=self.y_val_target, 
+                                                            acpr_meter=self.acpr_meter)
+            self.results["dla"]["nmse"].append(nmse)
+            self.results["dla"]["acpr_left"].append(acpr_left)
+            self.results["dla"]["acpr_right"].append(acpr_right)
+
+        
+    def _ila_arch_with_noise(self):
+        from modules import learning
+        
+        for snr in self.snr_range:
+            print(f"SNR: {snr}")
+            dpd_model = self.base_model_cls(**self.model_params)
+            casc_pa_noise = self._create_pa_noise_cascade(snr)
+            casc_ila_train = CascadeModel(model_1=casc_pa_noise, model_2=dpd_model, gain=self.gain, cascade_type="ila")
+            casc_ila_eval = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
+            optimizer = torch.optim.Adam(casc_ila_train.parameters(), lr=self.lr)
+
+            learning.train(net=casc_ila_train, 
+                        criterion=self.criterion, 
+                        optimizer=optimizer, 
+                        train_loader=self.ila_train_loader, 
+                        val_loader=self.ila_val_loader, 
+                        grad_clip_val=self.grad_clip_val, 
+                        n_epochs=self.epochs, 
+                        metric_criterion=self.metric_criterion)
+
+            nmse, acpr_left, acpr_right = noise_realizations(self.num_realizations, 
+                                                            model=casc_ila_eval, 
+                                                            x=self.x_val, 
+                                                            y_target=self.y_val_target, 
+                                                            acpr_meter=self.acpr_meter)
+            self.results["ila"]["nmse"].append(nmse)
+            self.results["ila"]["acpr_left"].append(acpr_left)
+            self.results["ila"]["acpr_right"].append(acpr_right)
+
+    
+    def _ilc_arch_with_noise(self):
+        from modules import learning
+        
+        for snr in self.snr_range:
+            print(f"SNR: {snr}")
+            casc_pa_noise = self._create_pa_noise_cascade(snr)
             
-            noise_gen_model = NoiseModel(snr=snr, fs=fs, bw=bw_main_ch)
-            casc_pa_noise = CascadeModel(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
-            casc_gru_dla = CascadeModel(model_1=dpd_model, 
-                                          model_2=casc_pa_noise, 
-                                          cascade_type="dla")
-            optimizer_gru = torch.optim.Adam(casc_gru_dla.parameters(), lr=lr)
+            self.u_k_train = learning.ilc_signal(self.x_train, self.y_train_target, casc_pa_noise, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
+            # self.u_k_val = learning.ilc_signal(self.x_val, self.y_val_target, casc_pa_noise, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
 
-            learning.train(net=casc_gru_dla, 
-                        criterion=criterion_gru, 
-                        optimizer=optimizer_gru, 
-                        train_loader=dla_train_loader, 
-                        val_loader=dla_val_loader, 
-                        grad_clip_val=1.0, 
-                        n_epochs=epochs, 
-                        metric_criterion=metric_criterion)
-
-            nmse, acpr_left, acpr_right = noise_realizations2(num_realizations, model=casc_gru_dla, x=x_val, y_target=y_val_target, acpr_meter=acpr_meter)
-            results["nmse"].append(nmse)
-            results["acpr_left"].append(acpr_left)
-            results["acpr_right"].append(acpr_right)
-
-        if arch_name == "ILA":
-            dpd_model = base_model(**nn_params)
+            self.data_dict["ilc_train_output"] = self.u_k_train
+            # self.data_dict["ilc_val_output"] = self.u_k_val
             
-            noise_gen_model = NoiseModel(snr=snr, fs=fs, bw=bw_main_ch)
-            casc_pa_noise = CascadeModel(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
-            casc_gru_ila_train = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, gain=gain, cascade_type="ila")
-            casc_gru_ila_eval = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
-            optimizer_gru = torch.optim.Adam(casc_gru_ila_train.parameters(), lr=lr)
+            if self.base_model_cls.__name__ == "GMP":
+                self.ilc_train_loader = [(self.x_train, self.u_k_train)]
+                # self.ilc_val_loader = [(self.x_val, self.u_k_val)]
+                self.ilc_val_loader = self.ilc_train_loader
+            else:
+                self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+                                                                                frame_length=self.frame_length, 
+                                                                                batch_size=self.batch_size, 
+                                                                                batch_size_eval=self.batch_size_eval, 
+                                                                                arch="ilc")
 
-            learning.train(net=casc_gru_ila_train, 
-                        criterion=criterion_gru, 
-                        optimizer=optimizer_gru, 
-                        train_loader=ila_train_loader, 
-                        val_loader=ila_val_loader, 
-                        grad_clip_val=1.0, 
-                        n_epochs=epochs, 
-                        metric_criterion=metric_criterion)
+            nmse_uk, acpr_left_uk, acpr_right_uk = noise_realizations(self.num_realizations, 
+                                                                    model=casc_pa_noise, 
+                                                                    x=self.u_k_train, 
+                                                                    y_target=self.y_train_target, 
+                                                                    acpr_meter=self.acpr_meter)
+            self.results["uk"]["nmse"].append(nmse_uk)
+            self.results["uk"]["acpr_left"].append(acpr_left_uk)
+            self.results["uk"]["acpr_right"].append(acpr_right_uk)
 
-            nmse, acpr_left, acpr_right = noise_realizations2(num_realizations, model=casc_gru_ila_eval, x=x_val, y_target=y_val_target, acpr_meter=acpr_meter)
-            results["nmse"].append(nmse)
-            results["acpr_left"].append(acpr_left)
-            results["acpr_right"].append(acpr_right)
-
-        if arch_name == "ILC":
-            noise_gen_model = NoiseModel(snr=snr, fs=fs, bw=bw_main_ch)
-            casc_pa_noise = CascadeModel(model_1=pa_model, model_2=noise_gen_model, cascade_type="dla")
-            
-            u_k_train = learning.ilc_signal(x_train, y_train_target, casc_pa_noise, epochs=u_k_epochs, learning_rate=u_k_lr)
-            u_k_val = learning.ilc_signal(x_val, y_val_target, casc_pa_noise, epochs=u_k_epochs, learning_rate=u_k_lr)
-            u_k_pa = casc_pa_noise.forward(u_k_val).detach()
-
-            data_dict["ilc_train_output"] = u_k_train
-            data_dict["ilc_val_output"] = u_k_val
-            ilc_train_loader, ilc_val_loader = data_loader.build_dataloaders(data_dict=data_dict, 
-                                                                             frame_length=frame_length, 
-                                                                             batch_size=batch_size, 
-                                                                             batch_size_eval=batch_size_eval, 
-                                                                             arch="ilc")
-            nmse_uk, acpr_left_uk, acpr_right_uk = noise_realizations2(num_realizations, model=casc_pa_noise, x=u_k_val, y_target=y_val_target, acpr_meter=acpr_meter)
-            # nmse_uk, acpr_left_uk, acpr_right_uk = noise_realizations(num_realizations, u_k_pa, y_train_target, snr, fs, bw_main_ch, acpr_meter)
-            results["nmse_uk"].append(nmse_uk)
-            results["acpr_left_uk"].append(acpr_left_uk)
-            results["acpr_right_uk"].append(acpr_right_uk)
-
-            dpd_model = base_model(**nn_params)
-            optimizer_gru = torch.optim.Adam(dpd_model.parameters(), lr=lr, weight_decay=1e-7)
+            dpd_model = self.base_model_cls(**self.model_params)
+            optimizer = torch.optim.Adam(dpd_model.parameters(), lr=self.lr)
             learning.train(net=dpd_model, 
-                        criterion=criterion_gru, 
-                        optimizer=optimizer_gru, 
-                        train_loader=ilc_train_loader, 
-                        val_loader=ilc_val_loader, 
-                        grad_clip_val=1.0, 
-                        n_epochs=epochs, 
-                        metric_criterion=metric_criterion)
+                        criterion=self.criterion, 
+                        optimizer=optimizer, 
+                        train_loader=self.ilc_train_loader, 
+                        val_loader=self.ilc_val_loader, 
+                        grad_clip_val=self.grad_clip_val, 
+                        n_epochs=self.epochs, 
+                        metric_criterion=self.metric_criterion)
 
-            casc_gru_ilc_eval = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
-            # y_val_gru_ilc = learning.net_inference(net=casc_gru_ilc_eval, x=x_val)
-            nmse, acpr_left, acpr_right = noise_realizations2(num_realizations, model=casc_gru_ilc_eval, x=x_val, y_target=y_val_target, acpr_meter=acpr_meter)
-            # nmse, acpr_left, acpr_right = noise_realizations(num_realizations, y_val_gru_ilc, y_val_target, snr, fs, bw_main_ch, acpr_meter)
-            results["nmse"].append(nmse)
-            results["acpr_left"].append(acpr_left)
-            results["acpr_right"].append(acpr_right)
+            casc_ilc_eval = CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
+            nmse, acpr_left, acpr_right = noise_realizations(self.num_realizations, 
+                                                            model=casc_ilc_eval, 
+                                                            x=self.x_val, 
+                                                            y_target=self.y_val_target, 
+                                                            acpr_meter=self.acpr_meter)
+            self.results["ilc"]["nmse"].append(nmse)
+            self.results["ilc"]["acpr_left"].append(acpr_left)
+            self.results["ilc"]["acpr_right"].append(acpr_right)
 
-    return results
+    
+    def run(self, arch_name=None):
+        if arch_name == "DLA":
+            self._dla_arch_with_noise()
+        elif arch_name == "ILA":
+            self._ila_arch_with_noise()
+        elif arch_name == "ILC":
+            self._ilc_arch_with_noise()

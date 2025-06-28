@@ -2,12 +2,15 @@ import torch
 from torch import nn
 from modules.utils import to_torch_tensor
 from modules.metrics import compute_mse, add_complex_noise
+import time
+from datetime import timedelta
+
 
 def optimize_dla(input_data, target_data, dpd_model, pa_model, epochs=100000, learning_rate=1e-3, 
                       add_noise=False, snr=None, fs=None, bw=None):
     input_data, target_data = map(to_torch_tensor, (input_data, target_data))
 
-    optimizer = torch.optim.Adam(dpd_model.parameters(), lr=learning_rate, amsgrad=True)
+    optimizer = torch.optim.Adam(dpd_model.parameters(), lr=learning_rate)
     for param in pa_model.parameters():
         param.requires_grad = False
             
@@ -16,10 +19,10 @@ def optimize_dla(input_data, target_data, dpd_model, pa_model, epochs=100000, le
         dpd_output = dpd_model.forward(input_data)
         pa_output = pa_model.forward(dpd_output)
 
-        if add_noise:
-            if snr is None or fs is None or bw is None:
-                raise ValueError("SNR, fs, and bw must be provided when add_noise=True")
-            pa_output = add_complex_noise(pa_output, snr, fs, bw)
+        # if add_noise:
+        #     if snr is None or fs is None or bw is None:
+        #         raise ValueError("SNR, fs, and bw must be provided when add_noise=True")
+        #     pa_output = add_complex_noise(pa_output, snr, fs, bw)
 
         loss = compute_mse(pa_output, target_data)
         loss.backward()
@@ -46,10 +49,10 @@ def optimize_ila(dpd_model, input_data, output_data, gain, epochs=100000, learni
     for epoch in range(epochs):
         optimizer.zero_grad()
         output = dpd_model.forward(output_data)
-        if add_noise:
-            if snr is None or fs is None or bw is None:
-                raise ValueError("SNR, fs, and bw must be provided when add_noise=True")
-            output = add_complex_noise(output, snr, fs, bw)
+        # if add_noise:
+        #     if snr is None or fs is None or bw is None:
+        #         raise ValueError("SNR, fs, and bw must be provided when add_noise=True")
+        #     output = add_complex_noise(output, snr, fs, bw)
         loss = compute_mse(output, input_data)
         loss.backward()
         optimizer.step()
@@ -62,24 +65,23 @@ def optimize_ila(dpd_model, input_data, output_data, gain, epochs=100000, learni
 
 def ilc_signal(input_data, target_data, pa_model, epochs=1000000, learning_rate=0.1, 
                     add_noise=False, snr=None, fs=None, bw=None):
-    input_data, target_data = map(to_torch_tensor, (input_data, target_data))
     u = torch.nn.Parameter(input_data.clone(), requires_grad=True)
     optimizer = torch.optim.Adam([u], lr=learning_rate)
     with torch.no_grad():
         for param in pa_model.parameters():
             param.requires_grad = False
         
-    if isinstance(pa_model, nn.Module):
-        pa_model = pa_model.eval()
 
+    pa_model = pa_model.eval()
+    start = time.time()
     for epoch in range(epochs):
         optimizer.zero_grad()
         pa_output = pa_model.forward(u)
         
-        if add_noise:
-            if snr is None or fs is None or bw is None:
-                raise ValueError("SNR, fs, and bw must be provided when add_noise=True")
-            pa_output = add_complex_noise(pa_output, snr, fs, bw)
+        # if add_noise:
+        #     if snr is None or fs is None or bw is None:
+        #         raise ValueError("SNR, fs, and bw must be provided when add_noise=True")
+        #     pa_output = add_complex_noise(pa_output, snr, fs, bw)
 
         loss = compute_mse(pa_output, target_data)
         loss.backward()
@@ -87,7 +89,8 @@ def ilc_signal(input_data, target_data, pa_model, epochs=1000000, learning_rate=
 
         if epoch%100==0:
             print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
-
+    elapsed = time.time() - start
+    print(f"Время расчёта ilc_signal: {timedelta(seconds=round(elapsed))}")
     return u.detach()
 
 
@@ -137,6 +140,7 @@ def train(net,
           metric_criterion,
           grad_clip_val=0):
     print("===Start training===")
+    start = time.time()
     for epoch in range(n_epochs):
         net, train_loss = net_train(net=net,
                         optimizer=optimizer,
@@ -150,7 +154,8 @@ def train(net,
                                              metric_criterion=metric_criterion)
 
         print(f"Epoch {epoch:02d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}")
-
+    elapsed = time.time() - start
+    print(f"Время обучения: {timedelta(seconds=round(elapsed))}")
     print("===Training complete===")
 
 

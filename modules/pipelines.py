@@ -1,9 +1,15 @@
-from modules import metrics, learning, params
+from modules import metrics, learning, params, data_loader, utils
 from modules.gmp_model import GMP
+from modules.nn_model import GRU
+import torch
 
 
-class GMPipeline:
-    def __init__(self, data_dict, train_props):
+class SimplePipeline():
+    def __init__(self, data_dict, train_props, base_model_cls):
+        
+        self.base_model_cls = base_model_cls
+        self.pa_model = None
+        
         self.data = data_dict
         cfg = data_dict["config"]
         self.fs = cfg["input_signal_fs"]
@@ -19,95 +25,202 @@ class GMPipeline:
         print(f"[PA] Calculated gain: {self.gain:.4f}")
         self.y_train_target = self.gain * self.x_train
         self.y_val_target = self.gain * self.x_val
-
-        self.pa_deg = train_props["pa_degree"]
-        self.dpd_deg = train_props["dpd_degree"]
+        
+        if self.base_model_cls.__name__ == "GMP":
+            self.model_params = params.make_gmp_params(**train_props["gmp_degree"])
+        else:
+            self.model_params = [train_props["hidden_size"], train_props["num_layers"]]
         self.lr = train_props["lr"]
         self.epochs = train_props["epochs"]
-        
-        self.uk_epochs = 1000
-        self.uk_lr = 0.001
+        self.acpr_meter = train_props["acpr_meter"]
 
         self.results = {}
-
-    def _make_model(self, degree, mtype):
-        cfg = params.make_gmp_params(
-            Ka=degree, La=degree,
-            Kb=degree, Lb=degree, Mb=degree,
-            Kc=degree, Lc=degree, Mc=degree,
-            model_type=mtype
-        )
-        return GMP(**cfg)
-
+        
+        self.criterion = metrics.compute_mse
+        self.metric_criterion = metrics.compute_nmse
+        
+        self.frame_length = None
+        self.batch_size = None
+        self.batch_size_eval = None
+        self.grad_clip_val = None
+        self.u_k_lr = None
+        self.u_k_epochs = None
+        
+        self.dla_train_loader = None
+        self.dla_val_loader = None
+        self.ila_train_loader = None
+        self.ila_val_loader = None
+        self.ilc_train_loader = None
+        self.ilc_val_loader = None
+        
+        self._prepare_params()
+        self._prepare_loaders()
+    
+    def _prepare_params(self):
+        if self.base_model_cls.__name__ == "GMP":
+            self.grad_clip_val = 0
+            self.u_k_lr=0.001
+            self.u_k_epochs=1000
+        else:
+            self.frame_length = 16
+            self.batch_size = 256
+            self.batch_size_eval = 2048
+            self.grad_clip_val = 1.0
+            self.u_k_lr = 0.1
+            self.u_k_epochs = 200
+    
+    def _prepare_loaders(self):
+        if self.base_model_cls.__name__ == "GMP":
+            self.dla_train_loader = [(self.x_train, self.y_train_target)]
+            self.dla_val_loader = [(self.x_val, self.y_val_target)]
+            self.ila_train_loader = [(self.x_train, self.x_train)]
+            self.ila_val_loader = [(self.x_val, self.x_val)]
+        else:
+            self.dla_train_loader, self.dla_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+                                                                            frame_length=self.frame_length, 
+                                                                            batch_size=self.batch_size, 
+                                                                            batch_size_eval=self.batch_size_eval, 
+                                                                            arch="dla")
+            self.ila_train_loader, self.ila_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+                                                                            frame_length=self.frame_length, 
+                                                                            batch_size=self.batch_size, 
+                                                                            batch_size_eval=self.batch_size_eval, 
+                                                                            arch="ila")
     def run_pa(self):
-        model = self._make_model(self.pa_deg, "pa_grad")
-        if not model.load_weights():
-            model.optimize_weights(self.x_train, self.y_train, epochs=self.epochs, learning_rate=self.lr)
-            model.save_weights()
-        y_pa = model(self.x_val).detach()
-        self.results["y_gmp_pa"] = y_pa
-        self.results["nmse_pa"] = metrics.compute_nmse(y_pa, self.y_val)
-        self.pa_model = model
-        print(f"[PA] NMSE: {self.results['nmse_pa']:.4f}")
+        self.pa_model = self.base_model_cls(**self.model_params, model_name="pa")
 
+        optimizer = torch.optim.Adam(self.pa_model.parameters(), lr=self.lr)
+
+        if not self.pa_model.load_weights():
+            learning.train(net=self.pa_model, 
+                    criterion=self.criterion, 
+                    optimizer=optimizer, 
+                    train_loader=self.pa_train_loader, 
+                    val_loader=self.pa_val_loader, 
+                    grad_clip_val=1.0, 
+                    n_epochs=self.epochs, 
+                    metric_criterion=self.metric_criterion)
+            self.pa_model.save_weights()
+        utils.freeze_pa_model(self.pa_model)
+
+        y_val_pa_model = learning.net_inference(net=self.pa_model, x=self.x_val)
+        pa_model_nmse = metrics.compute_nmse(y_val_pa_model, self.y_val)
+        pa_model_acpr = metrics.calculate_acpr(y_val_pa_model, self.acpr_meter)
+        print(f"[PA] NMSE: {pa_model_nmse:.2f}, ACPR: {pa_model_acpr}")
+        self.results["pa"] = {
+            "nmse": pa_model_nmse,
+            "acpr": pa_model_acpr,
+            "y_val_pa_model": y_val_pa_model
+        }
+    
     def run_dla(self):
-        model = self._make_model(self.dpd_deg, "dpd_dla_grad")
-        if not model.load_weights():
-            learning.optimize_dla(
-                self.x_train, self.y_train_target,
-                model, self.pa_model,
-                epochs=self.epochs, learning_rate=self.lr
-            )
-            model.save_weights()
-        y_dla = model(self.x_val).detach()
-        y_lin = self.pa_model(y_dla).detach()
-        self.results["y_dpd_dla_grad"] = y_dla
-        self.results["y_linearized_dla_grad"] = y_lin
-        self.results["nmse_dla"] = metrics.compute_nmse(y_lin, self.y_val_target)
-        print(f"[DLA] NMSE after PA: {self.results['nmse_dla']:.4f}")
+        
+        dpd_model = self.base_model_cls(**self.model_params)
+        is_load = dpd_model.load_weights()
+        casc_dla = utils.CascadeModel(model_1=dpd_model, 
+                                        model_2=self.pa_model, 
+                                        cascade_type="dla")
+        optimizer = torch.optim.Adam(casc_dla.parameters(), lr=self.lr)
 
-    def run_ila(self, epochs=1_000, lr=1e-2):
-        model = self._make_model(self.dpd_deg, "dpd_ila_grad")
-        if not model.load_weights():
-            learning.optimize_ila(
-                model, self.x_train, self.y_train,
-                self.gain, epochs=epochs, learning_rate=lr,
-                pa_model=self.pa_model
-            )
-            model.save_weights()
-        y_ila = model(self.x_val).detach()
-        y_lin = self.pa_model(y_ila).detach()
-        self.results["y_dpd_ila_grad"] = y_ila
-        self.results["y_linearized_ila_grad"] = y_lin
-        self.results["nmse_ila"] = metrics.compute_nmse(y_lin, self.y_val_target)
-        print(f"[ILA] NMSE after PA: {self.results['nmse_ila']:.4f}")
+        if not is_load:
+            learning.train(net=casc_dla, 
+                        criterion=self.criterion, 
+                        optimizer=optimizer, 
+                        train_loader=self.dla_train_loader, 
+                        val_loader=self.dla_val_loader, 
+                        grad_clip_val=self.grad_clip_val, 
+                        n_epochs=self.epochs, 
+                        metric_criterion=self.metric_criterion)
+            dpd_model.save_weights()
+        
 
+        y_val_dla = learning.net_inference(net=casc_dla, x=self.x_val)
+        dla_nmse = metrics.compute_nmse(y_val_dla, self.y_val_target)
+        dla_acpr = metrics.calculate_acpr(y_val_dla, self.acpr_meter)
+        print(f"[DLA] NMSE: {dla_nmse:.2f}, ACPR: {dla_acpr}")
+
+        self.results["dla"] = {
+            "nmse": dla_nmse,
+            "acpr": dla_acpr,
+            "y_val_dla": y_val_dla
+        }
+
+    def run_ila(self):
+        dpd_model = self.base_model_cls(**self.model_params)
+        is_load = dpd_model.load_weights()
+        casc_ila_train = utils.CascadeModel(model_1=self.pa_model, model_2=dpd_model, gain=self.gain, cascade_type="ila")
+        casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
+        optimizer = torch.optim.Adam(casc_ila_train.parameters(), lr=self.lr)
+
+        if not is_load:
+            learning.train(net=casc_ila_train, 
+                        criterion=self.criterion, 
+                        optimizer=optimizer, 
+                        train_loader=self.ila_train_loader, 
+                        val_loader=self.ila_val_loader, 
+                        grad_clip_val=self.grad_clip_val, 
+                        n_epochs=self.epochs, 
+                        metric_criterion=self.metric_criterion)
+            dpd_model.save_weights()
+        
+        y_val_ila = learning.net_inference(net=casc_ila_eval, x=self.x_val)
+        ila_nmse = metrics.compute_nmse(y_val_ila, self.y_val_target)
+        ila_acpr = metrics.calculate_acpr(y_val_ila, self.acpr_meter)
+        print(f"[ILA] NMSE: {ila_nmse:.2f}, ACPR: {ila_acpr}")
+
+        self.results["ila"] = {
+            "nmse": ila_nmse,
+            "acpr": ila_acpr,
+            "y_val_ila": y_val_ila
+        }
+        
     def run_ilc(self):
-        u = learning.ilc_signal(
-            self.x_train, self.y_train_target,
-            self.pa_model, epochs=self.uk_epochs, learning_rate=self.uk_lr
-        )
-        self.results["u_k"] = u
-        u_pa = self.pa_model(u).detach()
-        self.results["u_k_pa"] = u_pa
+        self.u_k_train = learning.ilc_signal(self.x_train, self.y_train_target, self.pa_model, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
+        self.u_k_pa = self.pa_model.forward(self.u_k_train).detach()
 
-        model = self._make_model(self.dpd_deg, "dpd_ilc_grad")
-        if not model.load_weights():
-            model.optimize_weights(self.x_train, u, epochs=self.epochs, learning_rate=self.lr)
-            model.save_weights()
+        # self.data_dict["ilc_train_output"] = self.u_k_train
+        ilc_nmse_uk = metrics.compute_nmse(self.u_k_pa, self.y_train_target)
+        ilc_acpr_uk = metrics.calculate_acpr(self.u_k_pa, self.acpr_meter)
+        print(f"[UK] NMSE: {ilc_nmse_uk:.2f}, ACPR: {ilc_acpr_uk}")
 
-        y_ilc_dpd = model(self.x_val).detach()
-        y_lin = self.pa_model(y_ilc_dpd).detach()
+        self.results["uk"] = {
+            "nmse": ilc_nmse_uk,
+            "acpr": ilc_acpr_uk,
+            "u_k_train": self.u_k_train
+        }
+        
+        if self.base_model_cls.__name__ == "GMP":
+            self.ilc_train_loader = [(self.x_train, self.u_k_train)]
+            self.ilc_val_loader = self.ilc_train_loader
+        else:
+            self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+                                                                            frame_length=self.frame_length, 
+                                                                            batch_size=self.batch_size, 
+                                                                            batch_size_eval=self.batch_size_eval, 
+                                                                            arch="ilc")
 
-        self.results["y_dpd_ilc_grad"] = y_ilc_dpd
-        self.results["y_linearized_ilc_grad"] = y_lin
-        self.results["nmse_ilc"] = metrics.compute_nmse(y_lin, self.y_val_target)
-        print(f"[ILC] NMSE after PA: {self.results['nmse_ilc']:.4f}")
+        dpd_model = self.base_model_cls(**self.model_params)
+        is_load = dpd_model.load_weights()
+        optimizer = torch.optim.Adam(dpd_model.parameters(), lr=self.lr)
+        if not is_load:
+            learning.train(net=dpd_model, 
+                        criterion=self.criterion, 
+                        optimizer=optimizer, 
+                        train_loader=self.ilc_train_loader, 
+                        val_loader=self.ilc_val_loader, 
+                        grad_clip_val=self.grad_clip_val, 
+                        n_epochs=self.epochs, 
+                        metric_criterion=self.metric_criterion)
+            dpd_model.save_weights()
 
-    def run(self):
-        """Запустить весь конвейер последовательно."""
-        self.run_pa()
-        self.run_dla()
-        self.run_ila()
-        self.run_ilc()
-        return self.results
+        casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
+        y_val_ilc = learning.net_inference(net=casc_ilc_eval, x=self.x_val)
+        ilc_nmse = metrics.compute_nmse(y_val_ilc, self.y_val_target)
+        ilc_acpr = metrics.calculate_acpr(y_val_ilc, self.acpr_meter)
+        print(f"[ILC] NMSE: {ilc_nmse:.2f}, ACPR: {ilc_acpr}")
+
+        self.results["ilc"] = {
+            "nmse": ilc_nmse,
+            "acpr": ilc_acpr,
+            "y_val_ilc": y_val_ilc
+        }
