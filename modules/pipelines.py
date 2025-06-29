@@ -293,21 +293,22 @@ class SimplePipeline():
 class SnrPipeline:
     def __init__(self,
                  base_model: nn.Module,
-                 model_params: Dict,
+                 input_model_params,
                  data_dict: Dict,
                  snr_params: Dict):
         
         self.base_model = base_model
-        self.model_params = model_params
         self.data_dict = data_dict
         self.snr_params = snr_params
+        self.input_model_params = input_model_params
 
         self.x_train = data_dict["train_input"]
         self.y_train = data_dict["train_output"]
         self.x_val = data_dict["val_input"]
         self.y_val = data_dict["val_output"]
-        self.y_train_target = data_dict['y_train_target']
-        self.y_val_target = data_dict['y_val_target']
+        self.gain = metrics.calculate_gain_complex(self.x_train, self.y_train)
+        self.y_train_target = self.gain * self.x_train
+        self.y_val_target = self.gain * self.x_val
         self.u_k_train = None
         self.u_k_val = None
             
@@ -352,10 +353,20 @@ class SnrPipeline:
     
     def _prepare_params(self):
         if self.base_model.__name__ == "GMP":
+            self.model_params = params.make_gmp_params(Ka=self.input_model_params["gmp_degree"],
+                                                       La=self.input_model_params["gmp_degree"],
+                                                       Kb=self.input_model_params["gmp_degree"],
+                                                       Lb=self.input_model_params["gmp_degree"],
+                                                       Mb=self.input_model_params["gmp_degree"],
+                                                       Kc=self.input_model_params["gmp_degree"],
+                                                       Lc=self.input_model_params["gmp_degree"],
+                                                       Mc=self.input_model_params["gmp_degree"])
             self.grad_clip_val = 0
             self.u_k_lr=0.001
-            self.u_k_epochs=1000
+            self.u_k_epochs=500
         else:
+            self.model_params = {"hidden_size": self.input_model_params["hidden_size"], 
+                                 "num_layers": self.input_model_params["num_layers"]}
             self.frame_length = 16
             self.batch_size = 256
             self.batch_size_eval = 2048
@@ -382,7 +393,7 @@ class SnrPipeline:
                                                                             arch="ila")
     def _create_pa_noise_cascade(self, snr):
         noise_gen_model = utils.NoiseModel(snr=snr, fs=self.fs, bw=self.bw_main_ch)
-        casc_pa_noise = utils.CascadeModel(model_1=self.pa_model, model_2=noise_gen_model, cascade_type="dla")
+        casc_pa_noise = utils.CascadeModel(model_1=self.pa_model, model_2=noise_gen_model)
         return casc_pa_noise
     
     def _dla_arch_with_noise(self):
@@ -392,8 +403,7 @@ class SnrPipeline:
             dpd_model = self.base_model(**self.model_params)
             casc_pa_noise = self._create_pa_noise_cascade(snr)
             casc_dla = utils.CascadeModel(model_1=dpd_model, 
-                                            model_2=casc_pa_noise, 
-                                            cascade_type="dla")
+                                            model_2=casc_pa_noise)
             optimizer = torch.optim.Adam(casc_dla.parameters(), lr=self.lr)
 
             learning.train(net=casc_dla, 
