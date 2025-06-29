@@ -6,12 +6,12 @@ from modules import utils
 
 
 class GMP(nn.Module):
-    def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, model_type=None):
+    def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, model_name=None):
         super().__init__()
         self.Ka, self.La = Ka, La
         self.Kb, self.Lb, self.Mb = Kb, Lb, Mb
         self.Kc, self.Lc, self.Mc = Kc, Lc, Mc
-        self.model_type = model_type
+        self.model_name = model_name
 
         self.a = torch.nn.Parameter(0.001 * torch.randn((self.Ka, self.La), dtype=torch.cfloat))
         self.b = torch.nn.Parameter(0.001 * torch.randn((self.Kb, self.Lb, self.Mb), dtype=torch.cfloat))
@@ -53,13 +53,13 @@ class GMP(nn.Module):
 
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
-        filename = f"{directory}/{self.model_type}_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}.pt"
+        filename = f"{directory}/{self.model_name}_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}.pt"
         torch.save(self.state_dict(), filename)
         print(f"Coefficients saved to {filename}")
 
 
     def load_weights(self, directory="model_params"):
-        filename = f"{directory}/{self.model_type}_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}.pt"
+        filename = f"{directory}/{self.model_name}_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}.pt"
         if os.path.isfile(filename):
             state_dict = torch.load(filename)
             self.load_state_dict(state_dict)
