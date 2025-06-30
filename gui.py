@@ -52,7 +52,7 @@ class FSMGUI(tk.Tk):
         ttk.Label(common_frame, text="Epochs").grid(row=1, column=0, sticky="e")
         self.train_epochs = ttk.Entry(common_frame, width=7)
         self.train_epochs.grid(row=1, column=1, sticky="w")
-        self.train_epochs.insert(0, 100)
+        self.train_epochs.insert(0, 1000)
 
         # Learning Rate
         ttk.Label(common_frame, text="Learning Rate").grid(row=2, column=0, sticky="e")

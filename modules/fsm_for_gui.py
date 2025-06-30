@@ -4,7 +4,7 @@ import threading
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
-from modules import data_loader, metrics, learning, params
+from modules import data_loader, metrics
 from modules.gmp_model import GMP
 from modules.pipelines import SimplePipeline, SnrPipeline
 
@@ -12,8 +12,7 @@ from modules.pipelines import SimplePipeline, SnrPipeline
 DPI = 100
 SPECTRUM_TITLE = "Спектральная плотность мощнсоти (дБ)"
 FREQ_TITLE = "Частота (МГц)"
-U_K_EPOCHS = 1000
-U_K_LR = 0.001
+
 
 logger = logging.getLogger("PA_DPD_FSM")
 logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
@@ -25,9 +24,9 @@ class FSM_State(enum.Enum):
     PLOT_PA = enum.auto()
     RUN_DPD = enum.auto()
     PLOT_DPD = enum.auto()
-    SELECT_NOISE_RANGE = enum.auto()
-    EVALUATE_NOISE = enum.auto()
-    PLOT_NOISE = enum.auto()
+    SNR_SETUP = enum.auto()
+    EVAL_SNR = enum.auto()
+    PLOT_SNR = enum.auto()
     DONE = enum.auto()
     ERROR = enum.auto()
 
@@ -38,9 +37,9 @@ class PA_DPD_FSM:
         FSM_State.PLOT_PA: "_plot_pa",
         FSM_State.RUN_DPD: "_run_dpd",
         FSM_State.PLOT_DPD: "_plot_dpd",
-        FSM_State.SELECT_NOISE_RANGE: "_select_noise_range",
-        FSM_State.EVALUATE_NOISE: "_evaluate_noise",
-        FSM_State.PLOT_NOISE: "_plot_noise",
+        FSM_State.SNR_SETUP: "_snr_setup",
+        FSM_State.EVAL_SNR: "_eval_snr",
+        FSM_State.PLOT_SNR: "_plot_snr",
     }
 
     def __init__(self, data_path: str, gui=None):
@@ -280,10 +279,10 @@ class PA_DPD_FSM:
             plt.figure()
             plt.show()
 
-        self.state = FSM_State.SELECT_NOISE_RANGE
+        self.state = FSM_State.SNR_SETUP
     
-    def _select_noise_range(self):
-        logger.info("STATE SELECT_NOISE_RANGE: инициализация snr вычислений")
+    def _snr_setup(self):
+        logger.info("STATE SNR_SETUP: инициализация snr вычислений")
         if self._stop_event.is_set():
             return
 
@@ -308,10 +307,10 @@ class PA_DPD_FSM:
                                               input_model_params=gmp_params,
                                               data_dict=self.data_dict, 
                                               snr_params=self.snr_params)
-        self.state = FSM_State.EVALUATE_NOISE
+        self.state = FSM_State.EVAL_SNR
 
-    def _evaluate_noise(self):
-        logger.info("STATE EVALUATE_NOISE: запуск по SNR")
+    def _eval_snr(self):
+        logger.info("STATE EVAL_SNR: запуск по SNR")
         if self._stop_event.is_set():
             return
         self._pause_event.wait()
@@ -320,10 +319,10 @@ class PA_DPD_FSM:
         self.snr_metrics_runner.run(arch_name="ILA")
         self.snr_metrics_runner.run(arch_name="ILC")
 
-        self.state = FSM_State.PLOT_NOISE
+        self.state = FSM_State.PLOT_SNR
 
-    def _plot_noise(self):
-        logger.info("STATE PLOT_NOISE: строим графики snr результатов")
+    def _plot_snr(self):
+        logger.info("STATE PLOT_SNR: строим графики snr результатов")
         if self._stop_event.is_set():
             return
         self._pause_event.wait()
