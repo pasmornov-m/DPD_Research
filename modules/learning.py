@@ -5,13 +5,9 @@ import time
 from datetime import timedelta
 
 
-def ilc_signal(input_data, target_data, pa_model, epochs=1000000, learning_rate=0.1):
+def ilc_signal(input_data, target_data, pa_model, epochs=100, learning_rate=0.1):
     u = torch.nn.Parameter(input_data.clone(), requires_grad=True)
     optimizer = torch.optim.Adam([u], lr=learning_rate)
-    with torch.no_grad():
-        for param in pa_model.parameters():
-            param.requires_grad = False
-        
 
     pa_model = pa_model.eval()
     start = time.time()
@@ -88,7 +84,7 @@ def train(net,
                                              dataloader=val_loader,
                                              metric_criterion=metric_criterion)
         
-        if epoch % 100 == 0 or epoch == n_epochs - 1:
+        if epoch % 1 == 0 or epoch == n_epochs - 1:
             print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}")
 
     elapsed = time.time() - start

@@ -1,6 +1,7 @@
 from modules import metrics, learning, params, data_loader, utils
 from modules.gmp_model import GMP
 from modules.nn_model import GRU
+from modules.config import GMP_GRAD_CLIP_VAL, GMP_U_K_LR, GMP_U_K_EPOCHS, NN_FRAME_LENGTH, NN_BATCH_SIZE, NN_BATCH_SIZE_EVAL, NN_GRAD_CLIP_VAL, NN_U_K_LR, NN_U_K_EPOCHS
 import torch
 from torch import nn
 from typing import Dict
@@ -29,6 +30,8 @@ class SimplePipeline():
         print(f"[PA] Calculated gain: {self.gain:.2f}")
         self.y_train_target = self.gain * self.x_train
         self.y_val_target = self.gain * self.x_val
+        
+        self.u_k_train = None
         
         if self.base_model.__name__ == "GMP":
             self.model_params = params.make_gmp_params(Ka=train_props["gmp_degree"],
@@ -72,16 +75,16 @@ class SimplePipeline():
     
     def _prepare_params(self):
         if self.base_model.__name__ == "GMP":
-            self.grad_clip_val = 0
-            self.u_k_lr=0.001
-            self.u_k_epochs=1000
+            self.grad_clip_val = GMP_GRAD_CLIP_VAL
+            self.u_k_lr = GMP_U_K_LR
+            self.u_k_epochs = GMP_U_K_EPOCHS
         else:
-            self.frame_length = 16
-            self.batch_size = 256
-            self.batch_size_eval = 2048
-            self.grad_clip_val = 1.0
-            self.u_k_lr = 0.1
-            self.u_k_epochs = 200
+            self.frame_length = NN_FRAME_LENGTH
+            self.batch_size = NN_BATCH_SIZE
+            self.batch_size_eval = NN_BATCH_SIZE_EVAL
+            self.grad_clip_val = NN_GRAD_CLIP_VAL
+            self.u_k_lr = NN_U_K_LR
+            self.u_k_epochs = NN_U_K_EPOCHS
     
     def _prepare_loaders(self):
         if self.base_model.__name__ == "GMP":
@@ -96,12 +99,12 @@ class SimplePipeline():
                                                                            frame_length=self.frame_length, 
                                                                            batch_size=self.batch_size, 
                                                                            batch_size_eval=self.batch_size_eval)
-            self.dla_train_loader, self.dla_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+            self.dla_train_loader, self.dla_val_loader = data_loader.build_dataloaders(data_dict=self.data, 
                                                                             frame_length=self.frame_length, 
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 
                                                                             arch="dla")
-            self.ila_train_loader, self.ila_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+            self.ila_train_loader, self.ila_val_loader = data_loader.build_dataloaders(data_dict=self.data, 
                                                                             frame_length=self.frame_length, 
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 
@@ -151,7 +154,7 @@ class SimplePipeline():
         time_train = 0
         if not is_load:
             start = time.time()
-            train_time = learning.train(net=casc_dla, 
+            learning.train(net=casc_dla, 
                         criterion=self.criterion, 
                         optimizer=optimizer, 
                         train_loader=self.dla_train_loader, 
@@ -215,13 +218,14 @@ class SimplePipeline():
         time_train = 0
         start = time.time()
         
-        self.u_k_train = learning.ilc_signal(self.x_train, self.y_train_target, self.pa_model, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
+        if self.u_k_train is None:
+            self.u_k_train = learning.ilc_signal(self.x_train, self.y_train_target, self.pa_model, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
         self.u_k_pa = self.pa_model.forward(self.u_k_train).detach()
         
         elapsed = time.time() - start
         time_train = timedelta(seconds=round(elapsed))
 
-        # self.data_dict["ilc_train_output"] = self.u_k_train
+        self.data["ilc_train_output"] = self.u_k_train
         ilc_nmse_uk = metrics.compute_nmse(self.u_k_pa, self.y_train_target)
         ilc_acpr_uk = metrics.calculate_acpr(self.u_k_pa, self.acpr_meter)
         print(f"[UK] NMSE: {ilc_nmse_uk:.2f}, ACPR: {ilc_acpr_uk}")
@@ -238,7 +242,7 @@ class SimplePipeline():
             self.ilc_train_loader = [(self.x_train, self.u_k_train)]
             self.ilc_val_loader = self.ilc_train_loader
         else:
-            self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+            self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(data_dict=self.data, 
                                                                             frame_length=self.frame_length, 
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 
@@ -281,13 +285,15 @@ class SimplePipeline():
         self.run_dla()
         self.run_ila()
         self.run_ilc()
-        return self.results
     
     def get_results(self):
         return self.results
     
     def get_pa_model(self):
         return self.pa_model
+    
+    def reset_u_k_signal(self):
+        self.u_k_train = None
 
 
 class SnrPipeline:
@@ -361,18 +367,18 @@ class SnrPipeline:
                                                        Kc=self.input_model_params["gmp_degree"],
                                                        Lc=self.input_model_params["gmp_degree"],
                                                        Mc=self.input_model_params["gmp_degree"])
-            self.grad_clip_val = 0
-            self.u_k_lr=0.001
-            self.u_k_epochs=500
+            self.grad_clip_val = GMP_GRAD_CLIP_VAL
+            self.u_k_lr = GMP_U_K_LR
+            self.u_k_epochs = GMP_U_K_EPOCHS
         else:
             self.model_params = {"hidden_size": self.input_model_params["hidden_size"], 
                                  "num_layers": self.input_model_params["num_layers"]}
-            self.frame_length = 16
-            self.batch_size = 256
-            self.batch_size_eval = 2048
-            self.grad_clip_val = 1.0
-            self.u_k_lr = 0.1
-            self.u_k_epochs = 200
+            self.frame_length = NN_FRAME_LENGTH
+            self.batch_size = NN_BATCH_SIZE
+            self.batch_size_eval = NN_BATCH_SIZE_EVAL
+            self.grad_clip_val = NN_GRAD_CLIP_VAL
+            self.u_k_lr = NN_U_K_LR
+            self.u_k_epochs = NN_U_K_EPOCHS
     
     def _prepare_loaders(self):
         if self.base_model.__name__ == "GMP":

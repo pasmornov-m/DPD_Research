@@ -24,11 +24,17 @@ class GRU(nn.Module):
     @utils.complex_handler
     def forward(self, x, h_0=None):
         if h_0 is None:
-            batch_size = x.size(0)
-            h_0 = torch.zeros(self.num_layers, batch_size, self.hidden_size)
+            if x.dim() == 2:
+                h_0 = torch.zeros(self.num_layers, self.hidden_size)
+            else:
+                batch_size = x.size(0)
+                h_0 = torch.zeros(self.num_layers, batch_size, self.hidden_size)
         out, _ = self.gru(x, h_0)
         y = self.fc(out)
         return y
+    
+    def count_params(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)

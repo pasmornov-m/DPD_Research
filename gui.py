@@ -227,20 +227,15 @@ class FSMGUI(tk.Tk):
         """Считать всё из полей, сконфигурировать FSM и запустить его."""
         try:
             self.fsm.reset()
-            self.fsm.set_gmp_params(int(self.gmp_degree.get()))
-
+            
+            self.fsm.set_gmp_degree(int(self.gmp_degree.get()))
             self.fsm.set_train_props(float(self.train_lr.get()), int(self.train_epochs.get()))
 
             snr_range = [int(s.strip()) for s in self.noise.get().split(",") if s.strip()]
             num_real = int(self.noise_real.get())
             self.fsm.set_noise_range(snr_range, num_real)
 
-            if hasattr(self.fsm, 'reset_events'):
-                self.fsm.reset_events()
-
-            # Запустить FSM в фоне
             threading.Thread(target=self.fsm.run, daemon=True).start()
-            # self.fsm.run()
 
             self.start_btn.config(state="disabled")
             self.pause_btn.config(state="normal")
@@ -268,15 +263,13 @@ class FSMGUI(tk.Tk):
         # Stop остаётся активна
 
     def on_stop(self):
-        # выставляем stop
         self.fsm.stop()
         logging.info("FSM stop requested by user")
-        # Обновляем кнопки: Disable Pause/Resume/Stop, Enable Start
         self.pause_btn.config(state="disabled")
         self.resume_btn.config(state="disabled")
         self.stop_btn.config(state="disabled")
-        self.start_btn.config(state="disabled")
-        # Можно обновить статус_label:
+        # чтобы можно было снова нажать Start
+        self.start_btn.config(state="normal")
         self.status_label.config(text="State: STOPPED")
     
     def on_fsm_finished(self):

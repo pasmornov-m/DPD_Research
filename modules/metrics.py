@@ -115,58 +115,28 @@ def calculate_acpr(input_data, acpr_meter):
     return acpr_vals
 
 
-# def add_complex_noise(signal, snr, fs, bw):
-#     # print(f"add_noise signal.shape: {signal.shape}")
-#     N = len(signal)
-#     snr_ln = 10 ** (snr/10)
-#     signal_var = compute_signal_power(signal)
-#     noise_var = torch.mean(signal_var / snr_ln * (fs/bw) * 0.5)
-#     noise = torch.sqrt(noise_var) * (torch.randn(N, dtype=signal.dtype) + 1j * torch.randn(N, dtype=signal.dtype))
-#     noise_signal = signal + noise
-#     return noise_signal
-
-
 def add_complex_noise(signal, snr, fs, bw):
     """
-    Добавляет комплексный аддитивный шум к сигналу (в любом представлении).
-    Поддерживает:
-    - Комплексные тензоры: shape [...], dtype=torch.cfloat
-    - Ре/им тензоры: shape [..., 2], dtype=torch.float32
-
-    Возвращает сигнал в том же формате, что и входной.
+    Добавляет комплексный шум к сигналу (поддержка: комплексный или [..., 2] real/imag).
+    Возвращает сигнал в том же формате.
     """
     snr_ln = 10 ** (snr / 10)
 
     if signal.dtype == torch.float32 and signal.shape[-1] == 2:
-        is_real_im = True
-        signal_complex = signal[..., 0] + 1j * signal[..., 1]
+
+        power_signal = torch.mean(signal.pow(2).sum(dim=-1), dim=-1, keepdim=True)
+        noise_power = power_signal / snr_ln * (fs / bw) * 0.5
+        noise = torch.randn_like(signal) * torch.sqrt(noise_power[..., None])
+        return signal + noise
+
     elif signal.dtype.is_complex:
-        is_real_im = False
-        signal_complex = signal
+        power_signal = torch.mean(torch.abs(signal) ** 2, dim=-1, keepdim=True)
+        noise_power = power_signal / snr_ln * (fs / bw) * 0.5
+        noise = (torch.randn_like(signal.real) + 1j * torch.randn_like(signal.imag)) * torch.sqrt(noise_power)
+        return signal + noise
+
     else:
-        raise ValueError("Unsupported signal format")
-
-    power_signal = torch.mean(torch.abs(signal_complex) ** 2, dim=-1, keepdim=True)
-    noise_power = power_signal / snr_ln * (fs / bw) * 0.5
-
-    noise = torch.sqrt(noise_power) * (torch.randn_like(signal_complex) + 1j * torch.randn_like(signal_complex))
-    noisy = signal_complex + noise
-
-    if is_real_im:
-        return torch.stack((noisy.real, noisy.imag), dim=-1)
-    else:
-        return noisy
-
-
-# def noise_realizations(num_realizations, signal, y_target, snr, fs, bw, acpr_meter):
-#     nmse_values, acpr_left_values, acpr_right_values = [], [], []
-#     for _ in range(num_realizations):
-#         y_noise = add_complex_noise(signal, snr, fs, bw)
-#         nmse_values.append(compute_nmse(y_noise, y_target))
-#         acpr_left, acpr_right = calculate_acpr(y_noise, acpr_meter)
-#         acpr_left_values.append(acpr_left)
-#         acpr_right_values.append(acpr_right)
-#     return map(lambda x: sum(x) / num_realizations, (nmse_values, acpr_left_values, acpr_right_values))
+        raise ValueError("Unsupported signal format: expected complex or real+imag in last dim.")
 
 
 def noise_realizations(num_realizations, model, x, y_target, acpr_meter):

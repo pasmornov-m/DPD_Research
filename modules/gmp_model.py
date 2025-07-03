@@ -27,29 +27,18 @@ class GMP(nn.Module):
 
         self.indices_Mb = torch.arange(self.Mb).unsqueeze(0).unsqueeze(2)
         self.indices_Mc = torch.arange(self.Mc).unsqueeze(0).unsqueeze(2)
-    
-    def number_parameters(self):
-        number_of_params = (self.Ka*self.La)+(self.Kb*self.Lb*self.Mb)+(self.Kc*self.Lc*self.Mc)
-        return number_of_params
+
+
+    def count_params(self):
+        count_params = (self.Ka*self.La)+(self.Kb*self.Lb*self.Mb)+(self.Kc*self.Lc*self.Mc)
+        return count_params
+
 
     @utils.iq_handler
     def forward(self, x):
         y = self._compute_terms(x)
         return y
 
-    def optimize_weights(self, input_data, target_data, epochs=100000, learning_rate=0.01, acpr_meter=None):
-
-        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, amsgrad=True)
-        for epoch in range(epochs):
-            optimizer.zero_grad()
-            output = self.forward(input_data)
-            loss = compute_mse(output, target_data)
-            loss.backward()
-            optimizer.step()
-
-            if epoch%100==0:
-                print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
-    
 
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)

@@ -17,6 +17,24 @@ FREQ_TITLE = "Частота (МГц)"
 logger = logging.getLogger("PA_DPD_FSM")
 logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
 
+def log_state(fn):
+    """Декоратор для логгирования входа/выхода из состояния и обработки стоп/паузы."""
+    def wrapper(self, *args, **kwargs):
+        logger.debug(f"→ Enter {fn.__name__}")
+        if self._stop_event.is_set():
+            logger.debug(f"← Exit {fn.__name__} early (stop requested)")
+            return
+        self._pause_event.wait()
+        try:
+            result = fn(self, *args, **kwargs)
+            logger.debug(f"← Exit {fn.__name__}")
+            return result
+        except Exception:
+            logger.exception(f"Exception in state {fn.__name__}")
+            self.state = FSM_State.ERROR
+            raise
+    return wrapper
+
 
 class FSM_State(enum.Enum):
     INIT = enum.auto()
@@ -60,9 +78,9 @@ class PA_DPD_FSM:
         logger.info("PA_DPD_FSM initialized with data_path=%s", data_path)
 
     # --- интерфейс от GUI ---
-    def set_gmp_params(self, params):
-        self.gmp_params = int(params)
-        logger.info("GMP params set: %s", self.gmp_params)
+    def set_gmp_degree(self, params):
+        self.gmp_degree = int(params)
+        logger.info("GMP degree : %d", self.gmp_degree)
     
     def set_train_props(self, lr, epochs):
         self.lr = float(lr)
@@ -100,9 +118,6 @@ class PA_DPD_FSM:
         Вызывать после stop(), когда FSM-поток завершился.
         """
         self.state = FSM_State.INIT
-        self.current_arch_index = 0
-        self.current_arch = None
-        self.u_k = None
         self._stop_event.clear()
         self._pause_event.set()
         logging.info("FSM reset to INIT")
@@ -112,10 +127,7 @@ class PA_DPD_FSM:
         logger.info("FSM run started")
         try:
             while not self._stop_event.is_set() and self.state not in (FSM_State.DONE, FSM_State.ERROR):
-                self._pause_event.wait()
-                if self._stop_event.is_set():
-                    break
-
+                
                 handler_name = self._HANDLERS.get(self.state)
                 if handler_name is None:
                     raise RuntimeError(f"No handler for state {self.state}")
@@ -124,15 +136,6 @@ class PA_DPD_FSM:
                 handler()
                 if self.gui:
                     self.gui.after(0, self.gui.refresh_status)
-                if self._stop_event.is_set():
-                    break
-            if self._stop_event.is_set():
-                logging.info("FSM stopped by request")
-            elif self.state == FSM_State.DONE:
-                logging.info("FSM completed successfully")
-            elif self.state == FSM_State.ERROR:
-                logging.error("FSM entered ERROR state")
-
         except Exception as e:
             self.state = FSM_State.ERROR
             logging.exception("Exception in FSM.run:")
@@ -140,12 +143,8 @@ class PA_DPD_FSM:
             if self.gui:
                 self.gui.after(0, self.gui.on_fsm_finished)
 
-
+    @log_state
     def _init(self):
-        logger.info("STATE INIT: загрузка данных")
-
-        if self._stop_event.is_set():
-            return
 
         self.data_dict = data_loader.load_data(self.data_path)
         
@@ -171,7 +170,7 @@ class PA_DPD_FSM:
         )
 
         self.gmp_train_props = {
-                "gmp_degree": self.gmp_params,
+                "gmp_degree": self.gmp_degree,
                 "lr": self.lr,
                 "epochs": self.epochs,
                 "acpr_meter": self.acpr_meter
@@ -181,24 +180,16 @@ class PA_DPD_FSM:
                               train_props=self.gmp_train_props, 
                               base_model=GMP)
 
-        logger.info("   Data loaded: fs=%s, bw_main_ch=%s", self.fs, self.bw_main_ch)
         self.state = FSM_State.RUN_PA
 
+    @log_state
     def _run_pa(self):
-        if self._stop_event.is_set():
-            return
-        self._pause_event.wait()
-
         self.gmp_pipeline.run_pa()
         self.pa_model = self.gmp_pipeline.get_pa_model()
-        
         self.state = FSM_State.PLOT_PA
 
+    @log_state
     def _plot_pa(self):
-        logger.info("STATE PLOT_PA: строим спектр PA")
-        if self._stop_event.is_set():
-            return
-        self._pause_event.wait()
 
         y_pa = self.gmp_pipeline.get_results()["pa"]["y_val_pa_model"]
         freqs, spectrum_out = metrics.power_spectrum(self.y_val, self.fs, self.nperseg)
@@ -227,9 +218,8 @@ class PA_DPD_FSM:
 
         self.state = FSM_State.RUN_DPD
 
+    @log_state
     def _run_dpd(self):
-        if self._stop_event.is_set():
-            return
         
         self.gmp_pipeline.run_dla()
         self.gmp_pipeline.run_ila()
@@ -237,11 +227,8 @@ class PA_DPD_FSM:
         
         self.state = FSM_State.PLOT_DPD
 
+    @log_state
     def _plot_dpd(self):
-        logger.info("STATE PLOT_DPD: строим спектр PA+DPD и ILC u_k")
-        if self._stop_event.is_set():
-            return
-        self._pause_event.wait()
         
         gmp_results = self.gmp_pipeline.get_results()
         gmp_y_val_pa = gmp_results["pa"]["y_val_pa_model"]
@@ -281,8 +268,8 @@ class PA_DPD_FSM:
 
         self.state = FSM_State.SNR_SETUP
     
+    @log_state
     def _snr_setup(self):
-        logger.info("STATE SNR_SETUP: инициализация snr вычислений")
         if self._stop_event.is_set():
             return
 
@@ -301,31 +288,23 @@ class PA_DPD_FSM:
             "gain": self.gmp_pipeline.gain
         }
         
-        gmp_params = {"gmp_degree": self.gmp_params}
+        gmp_degree = {"gmp_degree": self.gmp_degree}
         
         self.snr_metrics_runner = SnrPipeline(base_model=GMP, 
-                                              input_model_params=gmp_params,
+                                              input_model_params=gmp_degree,
                                               data_dict=self.data_dict, 
                                               snr_params=self.snr_params)
         self.state = FSM_State.EVAL_SNR
 
+    @log_state
     def _eval_snr(self):
-        logger.info("STATE EVAL_SNR: запуск по SNR")
-        if self._stop_event.is_set():
-            return
-        self._pause_event.wait()
-
         self.snr_metrics_runner.run(arch_name="DLA")
         self.snr_metrics_runner.run(arch_name="ILA")
         self.snr_metrics_runner.run(arch_name="ILC")
-
         self.state = FSM_State.PLOT_SNR
 
+    @log_state
     def _plot_snr(self):
-        logger.info("STATE PLOT_SNR: строим графики snr результатов")
-        if self._stop_event.is_set():
-            return
-        self._pause_event.wait()
 
         snr_range = self.noise_range
         results = self.snr_metrics_runner.get_results()
@@ -407,7 +386,7 @@ class PA_DPD_FSM:
     
     def on_fsm_finished(self):
         logging.info("GUI: FSM finished; updating buttons")
-        # предполагается, что GUI имеет start_btn, pause_btn, resume_btn, stop_btn
+
         try:
             self.start_btn.config(state="normal")
             self.pause_btn.config(state="disabled")
