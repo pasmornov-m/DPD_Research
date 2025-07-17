@@ -402,8 +402,7 @@ class SnrPipeline:
         casc_pa_noise = utils.CascadeModel(model_1=self.pa_model, model_2=noise_gen_model)
         return casc_pa_noise
     
-    def _dla_arch_with_noise(self):
-        
+    def run_dla_noise(self):
         for snr in self.snr_range:
             print(f"SNR: {snr}")
             dpd_model = self.base_model(**self.model_params)
@@ -431,7 +430,7 @@ class SnrPipeline:
             self.results["dla"]["acpr_right"].append(acpr_right)
 
         
-    def _ila_arch_with_noise(self):
+    def run_ila_noise(self):
         
         for snr in self.snr_range:
             print(f"SNR: {snr}")
@@ -460,7 +459,7 @@ class SnrPipeline:
             self.results["ila"]["acpr_right"].append(acpr_right)
 
     
-    def _ilc_arch_with_noise(self):
+    def run_ilc_noise(self):
         
         for snr in self.snr_range:
             print(f"SNR: {snr}")
@@ -514,13 +513,10 @@ class SnrPipeline:
             self.results["ilc"]["acpr_right"].append(acpr_right)
 
     
-    def run(self, arch_name=None):
-        if arch_name == "DLA":
-            self._dla_arch_with_noise()
-        elif arch_name == "ILA":
-            self._ila_arch_with_noise()
-        elif arch_name == "ILC":
-            self._ilc_arch_with_noise()
+    def run(self):
+        self.run_dla_noise()
+        self.run_ila_noise()
+        self.run_ilc_noise()
     
     def get_results(self):
         return self.results

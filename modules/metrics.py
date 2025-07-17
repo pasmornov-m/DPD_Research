@@ -5,7 +5,10 @@ from scipy.signal import welch, get_window, lfilter
 from modules.utils import to_torch_tensor, iq_to_complex
 
 
-def compute_mse(x, y):
+def compute_mse(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """
+    Вычисляет среднеквадратичную ошибку (MSE) между двумя сигналами.
+    """
     if torch.is_complex(x):
         x = torch.view_as_real(x)
     if torch.is_complex(y):
@@ -20,20 +23,20 @@ def compute_mse(x, y):
     return mse(x, y)
 
 
-def compute_nmse(prediction, ground_truth):
-    if torch.is_complex(prediction):
-        prediction = torch.view_as_real(prediction)
-    if torch.is_complex(ground_truth):
-        ground_truth = torch.view_as_real(ground_truth)
+def compute_nmse(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    if torch.is_complex(x):
+        x = torch.view_as_real(x)
+    if torch.is_complex(y):
+        y = torch.view_as_real(y)
 
-    if prediction.shape != ground_truth.shape:
-        raise ValueError(f"Формы входов не совпадают: prediction {prediction.shape}, ground_truth {ground_truth.shape}")
-    if prediction.shape[-1] != 2:
+    if x.shape != y.shape:
+        raise ValueError(f"Формы входов не совпадают: x {x.shape}, y {y.shape}")
+    if x.shape[-1] != 2:
         raise ValueError("Ожидается последний размер = 2 (I, Q)")
 
-    mse = compute_mse(prediction, ground_truth)
+    mse = compute_mse(x, y)
 
-    energy = (ground_truth ** 2).sum(dim=-1).mean()
+    energy = (y ** 2).sum(dim=-1).mean()
 
     if energy == 0:
         raise ZeroDivisionError("Energy of the ground truth is zero.")

@@ -27,6 +27,9 @@ class GMP(nn.Module):
 
         self.indices_Mb = torch.arange(self.Mb).unsqueeze(0).unsqueeze(2)
         self.indices_Mc = torch.arange(self.Mc).unsqueeze(0).unsqueeze(2)
+        
+        self.cached_N = None
+        self.cached_indices = {}
 
 
     def count_params(self):
@@ -59,7 +62,7 @@ class GMP(nn.Module):
             return False
         
     
-    def _compute_terms(self, x):
+    def _compute_terms(self, x: torch.Tensor) -> torch.Tensor:
         N = x.shape[0]
         indices_N = torch.arange(N).unsqueeze(0)
 
