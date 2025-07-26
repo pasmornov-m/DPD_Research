@@ -71,6 +71,40 @@ def iq_handler(forward_func):
         return y
     return wrapper
 
+def complex_handler_np(func):
+    @functools.wraps(func)
+    def wrapper(self, inputs, outputs=None, *args, **kwargs):
+        is_complex = inputs.is_complex() or (outputs.is_complex() if outputs is not None else False)
+        is_torch_in  = isinstance(inputs, torch.Tensor)
+        is_torch_out = isinstance(outputs, torch.Tensor) if outputs is not None else False
+        is_torch = is_torch_in or is_torch_out
+        
+        if is_complex:
+            inputs = complex_to_iq(inputs)
+            outputs = complex_to_iq(outputs) if outputs is not None else None
+        else:
+            inputs = inputs
+            outputs = outputs if outputs is not None else None
+        
+        if is_torch:
+            dtype = inputs.dtype
+            inputs = inputs.detach().cpu().numpy()
+            outputs = outputs.detach().cpu().numpy() if outputs is not None else None
+        else:
+            inputs = np.array(inputs)
+            outputs = np.array(outputs) if outputs is not None else None
+            
+        result = func(self, inputs, outputs, *args, **kwargs)
+        
+        if is_torch:
+            result = to_torch_tensor(result)
+        
+        if is_complex:
+            result = iq_to_complex(result)
+        
+        return result
+    return wrapper
+
 
 class NoiseModel():
     def __init__(self, snr, fs, bw):
