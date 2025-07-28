@@ -774,12 +774,7 @@ class TorchESN(nn.Module):
         i.e., computes the next network state by applying the recurrent weights
         to the last state & and feeding in the current input and output patterns
         """
-        # if self.teacher_forcing:
-        #     preactivation = (self.W @ state +
-        #                     self.W_in @ input_pattern +
-        #                     self.W_feedb @ output_pattern)
-        # else:
-        #     preactivation = self.W @ state + self.W_in @ input_pattern
+        
         inp = torch.cat([state, input_pattern, output_pattern], dim=0)
         preactivation = self.W_comb @ inp
         return torch.tanh(preactivation) + noise
@@ -814,13 +809,14 @@ class TorchESN(nn.Module):
     @utils.complex_handler
     def fit(self, inputs, outputs):
         inputs, outputs = map(torch.squeeze, [inputs, outputs])
+        N = inputs.shape[0]
+        
         inputs = self._scale_inputs(inputs)
         outputs = self._scale_teacher(outputs)
-        
-        N = inputs.shape[0]
         noise_vec = self.noise * (torch.rand(N, self.n_reservoir) - 0.5)
 
         states = torch.zeros(N, self.n_reservoir)
+
         for n in range(1, N):
             states[n] = self._update(states[n - 1], inputs[n], outputs[n - 1], noise_vec[n])
 
