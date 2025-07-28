@@ -393,11 +393,6 @@ class ESN():
 
 
 
-
-
-
-
-
 class CustomESN():
     def __init__(self, 
                  n_inputs, 
@@ -656,3 +651,140 @@ class CustomESN():
                                                            np.concatenate([states[n + 1, :], inputs[n + 1, :]])))
 
         return self._unscale_teacher(self.out_activation(outputs[1:]))
+
+
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class TorchESN(nn.Module):
+    def __init__(self,
+                 n_inputs: int,
+                 n_outputs: int,
+                 n_reservoir: int = 200,
+                 spectral_radius: float = 0.95,
+                 sparsity: float = 0.0,
+                 noise: float = 1e-3,
+                 input_shift=None,
+                 input_scaling=None,
+                 teacher_forcing: bool = True,
+                 teacher_scaling=None,
+                 teacher_shift=None,
+                 seed: int = None,
+                 silent: bool = True):
+        super().__init__()
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        self.n_reservoir = n_reservoir
+        self.spectral_radius = spectral_radius
+        self.sparsity = sparsity
+        self.noise = noise
+        self.teacher_forcing = teacher_forcing
+        self.silent = silent
+
+        # Обработка input_shift / input_scaling
+        def to_tensor(v, length):
+            if v is None: return None
+            t = torch.as_tensor(v, dtype=torch.float32)
+            if t.ndim == 0: t = t.repeat(length)
+            if t.ndim == 1 and t.numel() == length: return t
+            raise ValueError(f"Argument length mismatch, expected {length}")
+        self.register_buffer('input_shift',   to_tensor(input_shift,   n_inputs))
+        self.register_buffer('input_scaling', to_tensor(input_scaling, n_inputs))
+
+        # фиксированный резервуар: W, W_in, W_fb
+        gen = torch.Generator().manual_seed(seed) if seed is not None else None
+        
+        W = torch.rand(n_reservoir, n_reservoir, generator=gen) - 0.5
+        mask = torch.rand(W.shape, generator=gen) < sparsity
+        W[mask] = 0.0
+        # нормируем spectral radius
+        eigs = torch.linalg.eigvals(W)
+        rho = eigs.abs().max().real
+        W = W * (spectral_radius / rho)
+        self.register_buffer('W', W)
+
+        W_in = torch.rand(n_reservoir, n_inputs, generator=gen) * 2 - 1
+        self.register_buffer('W_in', W_in)
+
+        W_fb = torch.rand(n_reservoir, n_outputs, generator=gen) * 2 - 1
+        self.register_buffer('W_fb', W_fb)
+
+        # единственный обучаемый слой — readout
+        self.readout = nn.Linear(n_reservoir + n_inputs, n_outputs, bias=False)
+
+    def forward(self,
+                inputs: torch.Tensor,
+                teachers: torch.Tensor = None,
+                compute_states: bool = False):
+        """
+        inputs: (B, T, n_inputs)
+        teachers: (B, T, n_outputs) or None
+        compute_states: если True — возвращаем пары (y_pred, states)
+        """
+        B, T, _ = inputs.shape
+        device = inputs.device
+
+        # масштабирование и сдвиг входа
+        u = inputs.clone()
+        if self.input_scaling is not None:
+            u = u * self.input_scaling.view(1, 1, -1)
+        if self.input_shift is not None:
+            u = u + self.input_shift.view(1, 1, -1)
+
+        x = torch.zeros(B, self.n_reservoir, device=device)
+        outputs = []
+        states = []
+
+        for t in range(T):
+            inp_t = u[:, t, :]  # (B, n_inputs)
+            fb = (teachers[:, t-1, :] if (teachers is not None and t>0) 
+                  else torch.zeros(B, self.n_outputs, device=device))
+
+            # обновляем резервуар
+            pre = x @ self.W.T            # (B, R)
+            pre = pre + inp_t @ self.W_in.T
+            if self.teacher_forcing:
+                pre = pre + fb @ self.W_fb.T
+            x = torch.tanh(pre) + self.noise * torch.randn_like(x)
+            
+            # readout
+            z = torch.cat([x, inp_t], dim=1)  # (B, R + n_inputs)
+            y = self.readout(z)               # (B, n_outputs)
+            outputs.append(y)
+            states.append(x)
+
+        Y = torch.stack(outputs, dim=1)        # (B, T, n_outputs)
+        if compute_states:
+            S = torch.stack(states, dim=1)     # (B, T, n_reservoir)
+            return Y, S
+        return Y
+
+    def fit(self, inputs: torch.Tensor, targets: torch.Tensor):
+        """
+        Специальный fit: вычисляем states на всем наборе
+        и решаем линейное уравнение для readout.weight.
+        """
+        self.eval()
+        with torch.no_grad():
+            # получаем только состояния, без readout
+            _, S = self.forward(inputs, teachers=targets, compute_states=True)
+            B, T, R = S.shape
+            # drop first transient steps
+            transient = min(T // 10, 100)
+            # формируем матрицу A = [S; U], и B = targets
+            S_ = S[:, transient:, :].reshape(-1, R)                          # (B*(T-tr), R)
+            U_ = inputs[:, transient:, :].reshape(-1, self.n_inputs)         # (B*(T-tr), I)
+            A = torch.cat([S_, U_], dim=1)                                    # (N, R+I)
+            Bmat = targets[:, transient:, :].reshape(-1, self.n_outputs)     # (N, O)
+
+            # решаем A W_out^T = Bmat методом least squares
+            Wout_T, _ = torch.linalg.lstsq(A, Bmat).solution, None
+            Wout = Wout_T.T  # (O, R+I)
+            # записываем в readout.weight
+            self.readout.weight.data.copy_(Wout)
+
+    def predict(self, inputs: torch.Tensor):
+        return self.forward(inputs, teachers=None)
