@@ -1,13 +1,14 @@
 import torch
 import os
+from modules import utils
 from modules.utils import to_torch_tensor, check_early_stopping
 from modules.metrics import compute_mse
 from modules.gmp_model import GMP
 
 
 class GMP_AR(GMP):
-    def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, Dy, model_type=None):
-        super().__init__(Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, model_type)
+    def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, Dy, model_name=None):
+        super().__init__(Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, model_name)
         self.Dy = Dy
         self.alpha = torch.nn.Parameter(0.001 * torch.randn(Dy))
 
@@ -15,12 +16,13 @@ class GMP_AR(GMP):
         self.logit_weights = torch.nn.Parameter(torch.tensor([0.01, 0.01]))
         self.ar_weights = torch.nn.Parameter(torch.tensor([0.01, 0.01]))
     
-    def number_parameters(self):
+    def count_params(self):
         num_gmp = self.Ka * self.La + self.Kb * self.Lb * self.Mb + self.Kc * self.Lc * self.Mc
         num_ar = self.Dy
         num_params = num_gmp + num_ar
         return num_params
 
+    @utils.iq_handler
     def forward(self, x):
         w_gmp, w_ar = torch.softmax(self.logit_weights, dim=0)
         y_gmp = super().forward(x)
@@ -28,32 +30,19 @@ class GMP_AR(GMP):
         y = w_gmp * y_gmp + w_ar * y_ar
         return y
 
-    def optimize_coefficients_grad(self, input_data, target_data, epochs=100000, learning_rate=0.01):
-        input_data, target_data = map(to_torch_tensor, (input_data, target_data))
-        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, amsgrad=True)
-        for epoch in range(epochs):
-            optimizer.zero_grad()
-            output = self.forward(input_data)
-            loss = compute_mse(output, target_data)
-            loss.backward()
-            optimizer.step()
-            
-            if epoch%99==0:
-                print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
-    
-
     # сохранение коэффициентов
-    def save_coefficients(self, directory="model_params"):
+    def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
-        filename = f"{directory}/{self.model_type}_narx_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}_Dy{self.Dy}.pt"
+        filename = f"{directory}/{self.model_name}_ar_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}_Dy{self.Dy}.pt"
         torch.save(self.state_dict(), filename)
         print(f"Coefficients saved to {filename}")
 
 
     # загрузка коэффициентов из файла
-    def load_coefficients(self, directory="model_params"):
-        filename = f"{directory}/{self.model_type}_narx_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}_Dy{self.Dy}.pt"
+    def load_weights(self, directory="model_params"):
+        filename = f"{directory}/{self.model_name}_ar_gmp_model_Ka{self.Ka}_La{self.La}_Kb{self.Kb}_Lb{self.Lb}_Mb{self.Mb}_Kc{self.Kc}_Lc{self.Lc}_Mc{self.Mc}_Dy{self.Dy}.pt"
         if os.path.isfile(filename):
+            print(filename)
             self.load_state_dict(torch.load(filename))
             print(f"Coefficients loaded from {filename}")
             return True

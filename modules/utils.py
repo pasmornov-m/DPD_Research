@@ -37,22 +37,28 @@ def complex_to_iq(complex_signal):
 def complex_handler(forward_func):
     """Декоратор для автоматической обработки комплексных чисел в методах forward"""
     @functools.wraps(forward_func)
-    def wrapper(self, input_x, *args, **kwargs):
-        is_complex = input_x.is_complex()
+    def wrapper(self, inputs, outputs=None, *args, **kwargs):
+        is_complex = inputs.is_complex() or (outputs.is_complex() if outputs is not None else False)
 
         if is_complex:
-            x = complex_to_iq(input_x)
-            x = x.unsqueeze(0)
+            inputs = complex_to_iq(inputs)
+            outputs = complex_to_iq(outputs) if outputs is not None else None
+            inputs = inputs.unsqueeze(0)
+            outputs = outputs.unsqueeze(0) if outputs is not None else None
         else:
-            x = input_x
+            inputs = inputs
+            outputs = outputs if outputs is not None else None
         
-        y = forward_func(self, x, *args, **kwargs)
+        result = forward_func(self, inputs, outputs, *args, **kwargs)
+        
+        if result is None:
+            return
         
         if is_complex:
-            y = torch.squeeze(y)
-            y = iq_to_complex(y)
+            result = torch.squeeze(result)
+            result = iq_to_complex(result)
         
-        return y
+        return result
     return wrapper
 
 def iq_handler(forward_func):
@@ -70,6 +76,7 @@ def iq_handler(forward_func):
             y = complex_to_iq(y)
         return y
     return wrapper
+
 
 def complex_handler_np(func):
     @functools.wraps(func)
