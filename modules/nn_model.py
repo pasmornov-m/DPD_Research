@@ -655,136 +655,213 @@ class CustomESN():
 
 
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 class TorchESN(nn.Module):
-    def __init__(self,
-                 n_inputs: int,
-                 n_outputs: int,
-                 n_reservoir: int = 200,
-                 spectral_radius: float = 0.95,
-                 sparsity: float = 0.0,
-                 noise: float = 1e-3,
+    def __init__(self, 
+                 n_inputs, 
+                 n_outputs, 
+                 n_reservoir=200,
+                 spectral_radius=0.95, 
+                 sparsity=0, 
+                 noise=0.001, 
                  input_shift=None,
-                 input_scaling=None,
-                 teacher_forcing: bool = True,
-                 teacher_scaling=None,
+                 input_scaling=None, 
+                 teacher_forcing=True, 
+                 feedback_scaling=None,
+                 teacher_scaling=None, 
                  teacher_shift=None,
-                 seed: int = None,
-                 silent: bool = True):
+                 random_state=None, 
+                 silent=True):
+        """
+        Args:
+            n_inputs: nr of input dimensions
+            n_outputs: nr of output dimensions
+            n_reservoir: nr of reservoir neurons
+            spectral_radius: spectral radius of the recurrent weight matrix
+            sparsity: proportion of recurrent weights set to zero
+            noise: noise added to each neuron (regularization)
+            input_shift: scalar or vector of length n_inputs to add to each
+                        input dimension before feeding it to the network.
+            input_scaling: scalar or vector of length n_inputs to multiply
+                        with each input dimension before feeding it to the netw.
+            teacher_forcing: if True, feed the target back into output units
+            teacher_scaling: factor applied to the target signal
+            teacher_shift: additive term applied to the target signal
+            random_state: positive integer seed, np.rand.RandomState object,
+                          or None to use numpy's builting RandomState.
+            silent: supress messages
+        """
+        
         super().__init__()
+        
+        # check for proper dimensionality of all arguments and write them down.
         self.n_inputs = n_inputs
-        self.n_outputs = n_outputs
         self.n_reservoir = n_reservoir
+        self.n_outputs = n_outputs
         self.spectral_radius = spectral_radius
         self.sparsity = sparsity
         self.noise = noise
+        self.input_shift = self._correct_dimensions(input_shift, n_inputs)
+        self.input_scaling = self._correct_dimensions(input_scaling, n_inputs)
+
+        self.teacher_scaling = teacher_scaling
+        self.teacher_shift = teacher_shift
+
+        self.out_activation = self._identity
+        self.inverse_out_activation = self._identity
+        self.random_state = random_state
+
+        # the given random_state might be either an actual RandomState object,
+        # a seed or None (in which case we use numpy's builtin RandomState)
+        if isinstance(random_state, np.random.RandomState):
+            self.random_state_ = random_state
+        elif random_state:
+            try:
+                self.random_state_ = np.random.RandomState(random_state)
+            except TypeError as e:
+                raise Exception("Invalid seed: " + str(e))
+        else:
+            self.random_state_ = np.random.mtrand._rand
+
         self.teacher_forcing = teacher_forcing
         self.silent = silent
+        self.initweights()
 
-        # Обработка input_shift / input_scaling
-        def to_tensor(v, length):
-            if v is None: return None
-            t = torch.as_tensor(v, dtype=torch.float32)
-            if t.ndim == 0: t = t.repeat(length)
-            if t.ndim == 1 and t.numel() == length: return t
-            raise ValueError(f"Argument length mismatch, expected {length}")
-        self.register_buffer('input_shift',   to_tensor(input_shift,   n_inputs))
-        self.register_buffer('input_scaling', to_tensor(input_scaling, n_inputs))
-
-        # фиксированный резервуар: W, W_in, W_fb
-        gen = torch.Generator().manual_seed(seed) if seed is not None else None
-        
-        W = torch.rand(n_reservoir, n_reservoir, generator=gen) - 0.5
-        mask = torch.rand(W.shape, generator=gen) < sparsity
+    def initweights(self):
+        W = torch.rand(self.n_reservoir, self.n_reservoir) - 0.5
+        mask = torch.rand_like(W) < self.sparsity
         W[mask] = 0.0
-        # нормируем spectral radius
-        eigs = torch.linalg.eigvals(W)
-        rho = eigs.abs().max().real
-        W = W * (spectral_radius / rho)
-        self.register_buffer('W', W)
+        eigvals = torch.linalg.eigvals(W).abs()
+        radius = eigvals.max().item()
+        self.W = (self.spectral_radius / radius) * W  # (R, R)
 
-        W_in = torch.rand(n_reservoir, n_inputs, generator=gen) * 2 - 1
-        self.register_buffer('W_in', W_in)
+        # W_in: input weights
+        self.W_in = torch.rand(self.n_reservoir, self.n_inputs) * 2 - 1
 
-        W_fb = torch.rand(n_reservoir, n_outputs, generator=gen) * 2 - 1
-        self.register_buffer('W_fb', W_fb)
+        # W_feedb: feedback weights
+        self.W_feedb = torch.rand(self.n_reservoir, self.n_outputs) * 2 - 1
+        
+        self.W_comb = torch.cat([self.W, self.W_in, self.W_feedb], dim=1)
+    
+    def _identity(self, x):
+        return x
+    
+    def _correct_dimensions(self, s, targetlength):
+        """checks the dimensionality of some numeric argument s, broadcasts it
+        to the specified length if possible.
 
-        # единственный обучаемый слой — readout
-        self.readout = nn.Linear(n_reservoir + n_inputs, n_outputs, bias=False)
+        Args:
+            s: None, scalar or 1D array
+            targetlength: expected length of s
 
-    def forward(self,
-                inputs: torch.Tensor,
-                teachers: torch.Tensor = None,
-                compute_states: bool = False):
+        Returns:
+            None if s is None, else numpy vector of length targetlength
         """
-        inputs: (B, T, n_inputs)
-        teachers: (B, T, n_outputs) or None
-        compute_states: если True — возвращаем пары (y_pred, states)
-        """
-        B, T, _ = inputs.shape
-        device = inputs.device
+        if s is not None:
+            s = np.array(s)
+            if s.ndim == 0:
+                s = np.array([s] * targetlength)
+            elif s.ndim == 1:
+                if not len(s) == targetlength:
+                    raise ValueError("Arg must have length " + str(targetlength))
+            else:
+                raise ValueError("Invalid argument")
+        return s
 
-        # масштабирование и сдвиг входа
-        u = inputs.clone()
+    def _update(self, state, input_pattern, output_pattern, noise):
+        """performs one update step.
+
+        i.e., computes the next network state by applying the recurrent weights
+        to the last state & and feeding in the current input and output patterns
+        """
+        # if self.teacher_forcing:
+        #     preactivation = (self.W @ state +
+        #                     self.W_in @ input_pattern +
+        #                     self.W_feedb @ output_pattern)
+        # else:
+        #     preactivation = self.W @ state + self.W_in @ input_pattern
+        inp = torch.cat([state, input_pattern, output_pattern], dim=0)
+        preactivation = self.W_comb @ inp
+        return torch.tanh(preactivation) + noise
+
+    def _scale_inputs(self, inputs):
+        """for each input dimension j: multiplies by the j'th entry in the
+        input_scaling argument, then adds the j'th entry of the input_shift
+        argument."""
         if self.input_scaling is not None:
-            u = u * self.input_scaling.view(1, 1, -1)
+            inputs = inputs * self.input_scaling
         if self.input_shift is not None:
-            u = u + self.input_shift.view(1, 1, -1)
+            inputs = inputs + self.input_shift
+        return inputs
 
-        x = torch.zeros(B, self.n_reservoir, device=device)
-        outputs = []
-        states = []
+    def _scale_teacher(self, teacher):
+        """multiplies the teacher/target signal by the teacher_scaling argument,
+        then adds the teacher_shift argument to it."""
+        if self.teacher_scaling is not None:
+            teacher = teacher * self.teacher_scaling
+        if self.teacher_shift is not None:
+            teacher = teacher + self.teacher_shift
+        return teacher
 
-        for t in range(T):
-            inp_t = u[:, t, :]  # (B, n_inputs)
-            fb = (teachers[:, t-1, :] if (teachers is not None and t>0) 
-                  else torch.zeros(B, self.n_outputs, device=device))
+    def _unscale_teacher(self, teacher_scaled):
+        """inverse operation of the _scale_teacher method."""
+        if self.teacher_shift is not None:
+            teacher_scaled = teacher_scaled - self.teacher_shift
+        if self.teacher_scaling is not None:
+            teacher_scaled = teacher_scaled / self.teacher_scaling
+        return teacher_scaled
 
-            # обновляем резервуар
-            pre = x @ self.W.T            # (B, R)
-            pre = pre + inp_t @ self.W_in.T
-            if self.teacher_forcing:
-                pre = pre + fb @ self.W_fb.T
-            x = torch.tanh(pre) + self.noise * torch.randn_like(x)
-            
-            # readout
-            z = torch.cat([x, inp_t], dim=1)  # (B, R + n_inputs)
-            y = self.readout(z)               # (B, n_outputs)
-            outputs.append(y)
-            states.append(x)
+    @utils.complex_handler
+    def fit(self, inputs, outputs):
+        inputs, outputs = map(torch.squeeze, [inputs, outputs])
+        inputs = self._scale_inputs(inputs)
+        outputs = self._scale_teacher(outputs)
+        
+        N = inputs.shape[0]
+        noise_vec = self.noise * (torch.rand(N, self.n_reservoir) - 0.5)
 
-        Y = torch.stack(outputs, dim=1)        # (B, T, n_outputs)
-        if compute_states:
-            S = torch.stack(states, dim=1)     # (B, T, n_reservoir)
-            return Y, S
-        return Y
+        states = torch.zeros(N, self.n_reservoir)
+        for n in range(1, N):
+            states[n] = self._update(states[n - 1], inputs[n], outputs[n - 1], noise_vec[n])
 
-    def fit(self, inputs: torch.Tensor, targets: torch.Tensor):
-        """
-        Специальный fit: вычисляем states на всем наборе
-        и решаем линейное уравнение для readout.weight.
-        """
-        self.eval()
-        with torch.no_grad():
-            # получаем только состояния, без readout
-            _, S = self.forward(inputs, teachers=targets, compute_states=True)
-            B, T, R = S.shape
-            # drop first transient steps
-            transient = min(T // 10, 100)
-            # формируем матрицу A = [S; U], и B = targets
-            S_ = S[:, transient:, :].reshape(-1, R)                          # (B*(T-tr), R)
-            U_ = inputs[:, transient:, :].reshape(-1, self.n_inputs)         # (B*(T-tr), I)
-            A = torch.cat([S_, U_], dim=1)                                    # (N, R+I)
-            Bmat = targets[:, transient:, :].reshape(-1, self.n_outputs)     # (N, O)
+        extended = torch.cat([states, inputs], dim=1)
+        transient = min(inputs.shape[1] // 10, 100)
+        A = extended[transient:]
+        B = self.inverse_out_activation(outputs[transient:])
 
-            # решаем A W_out^T = Bmat методом least squares
-            Wout_T, _ = torch.linalg.lstsq(A, Bmat).solution, None
-            Wout = Wout_T.T  # (O, R+I)
-            # записываем в readout.weight
-            self.readout.weight.data.copy_(Wout)
+        # Решение через torch.linalg.lstsq
+        W_out_T, *_ = torch.linalg.lstsq(A, B)
+        self.W_out = nn.Parameter(W_out_T.T.detach(), requires_grad=True)
 
-    def predict(self, inputs: torch.Tensor):
-        return self.forward(inputs, teachers=None)
+        self.laststate = states[-1].detach()
+        self.lastinput = inputs[-1].detach()
+        self.lastoutput = outputs[-1].detach()
+
+    @utils.complex_handler
+    def predict(self, inputs, continuation=True):
+        inputs = torch.squeeze(inputs)
+        N = inputs.shape[0]
+        noise_vec = self.noise * (torch.rand(N, self.n_reservoir) - 0.5)
+
+        if continuation:
+            state = self.laststate.clone()
+            input0 = self.lastinput.clone()
+            output0 = self.lastoutput.clone()
+        else:
+            state = torch.zeros(self.n_reservoir)
+            input0 = torch.zeros(self.n_inputs)
+            output0 = torch.zeros(self.n_outputs)
+
+        inputs = torch.cat([input0.unsqueeze(0), self._scale_inputs(inputs)], dim=0)
+        states = torch.zeros(N + 1, self.n_reservoir)
+        outputs = torch.zeros(N + 1, self.n_outputs)
+
+        states[0] = state
+        outputs[0] = output0
+
+        for n in range(N):
+            states[n + 1] = self._update(states[n], inputs[n + 1], outputs[n], noise_vec[n])
+            x = torch.cat([states[n + 1], inputs[n + 1]])
+            outputs[n + 1] = self.out_activation(self.W_out @ x)
+
+        return self._unscale_teacher(self.out_activation(outputs[1:]))
