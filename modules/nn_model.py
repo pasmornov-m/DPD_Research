@@ -88,6 +88,7 @@ class LSTM(nn.Module):
                                 out_features=self.output_size,
                                 bias=self.bias)
 
+
     @utils.complex_handler
     def forward(self, x, h_0=None):
         if h_0 is None:
@@ -96,6 +97,10 @@ class LSTM(nn.Module):
         out, (_, _) = self.lstm(x, (h_0, h_0))
         y = self.fc_out(out)
         return y
+
+    def count_params(self):
+            return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
 
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
@@ -125,13 +130,48 @@ class LSTM(nn.Module):
 
 
 class CustomTCN(TCN):
-    def __init__(self, **kwargs):
+    def __init__(self, model_name="custom_tcn", **kwargs):
         super().__init__(**kwargs)
+        self.model_name = model_name
+        self.num_inputs = kwargs.get("num_inputs")
+        self.output_projection = kwargs.get("output_projection")
+        self.num_channels = kwargs.get("num_channels")
+        self.kernel_size = kwargs.get("kernel_size")
+        self.dropout = kwargs.get("dropout", 0.0)
+        self.input_shape = kwargs.get("input_shape", "NCL")
 
     @utils.complex_handler
     def forward(self, x, *args, **kwargs):
         out = super().forward(x, *args, **kwargs)
         return out
+    
+    def count_params(self):
+            return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def save_weights(self, directory="model_params"):
+        os.makedirs(directory, exist_ok=True)
+        filename = (
+            f"{directory}/{self.model_name}_tcn_model_"
+            f"ch{len(self.num_channels)}_ks{self.kernel_size}_"
+            f"in{self.num_inputs}_out{self.output_projection}.pt"
+        )
+        torch.save(self.state_dict(), filename)
+        print(f"Model weights saved to {filename}")
+
+    def load_weights(self, directory="model_params"):
+        filename = (
+            f"{directory}/{self.model_name}_tcn_model_"
+            f"ch{len(self.num_channels)}_ks{self.kernel_size}_"
+            f"in{self.num_inputs}_out{self.output_projection}.pt"
+        )
+        if os.path.isfile(filename):
+            state_dict = torch.load(filename, map_location='cpu')
+            self.load_state_dict(state_dict)
+            print(f"Model weights loaded from {filename}")
+            return True
+        else:
+            print(f"No saved weights found at {filename}, initializing new parameters.")
+            return False
 
 
 
@@ -592,12 +632,14 @@ class DifferentiableESN(nn.Module):
                  noise: float = 0.001,
                  input_scaling: float | list[float] = 1.0,
                  input_shift: float | list[float] = 0.0,
-                 random_state: int | None = None):
+                 random_state: int | None = None,
+                 model_name: str = "esn"):
         super().__init__()
         self.n_inputs = n_inputs
         self.n_outputs = n_outputs
         self.n_reservoir = n_reservoir
         self.noise = noise
+        self.model_name = model_name
 
         # — входное масштабирование/сдвиг
         self.register_buffer('input_scaling', self._make_vector(input_scaling, n_inputs))
@@ -630,8 +672,12 @@ class DifferentiableESN(nn.Module):
             raise ValueError(f'Expected length {length}, got {t.shape[0]}')
         return t
 
-    def reset_state(self, batch_size: int, device: torch.device):
-        self.state = torch.zeros(batch_size, self.n_reservoir, device=device)
+    def reset_state(self, batch_size: int):
+        self.state = torch.zeros(self.n_reservoir, batch_size)
+        
+    def count_params(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
 
     @utils.complex_handler
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -640,30 +686,46 @@ class DifferentiableESN(nn.Module):
         returns: [batch, seq_len, n_outputs]
         """
         B, T, _ = x.shape
-        # сброс состояния на каждый новый batch
-        self.reset_state(B, x.device)
+        self.reset_state(B)
         h = self.state
+        
+        noise_vec = self.noise * torch.randn(self.n_reservoir, B, T)
+        u_all = (x * self.input_scaling + self.input_shift).transpose(1, 2)
+        u_all = u_all.permute(1, 0, 2)
 
         outputs = []
+        fb = torch.zeros(self.n_reservoir, B)
         for t in range(T):
-            u_t = x[:, t, :] * self.input_scaling + self.input_shift   # [B, n_inputs]
-
-            # reservoir update: h_t = tanh(W·h_{t-1} + W_in·u_t + W_feedb·y_{t-1})
-            if t == 0:
-                fb = torch.zeros(self.n_reservoir, B, device=x.device)
-            else:
-                # предыдущий выход
-                y_prev = outputs[-1].transpose(0,1)  # [n_outputs, B]
-                fb = self.W_feedb @ y_prev       # [n_reservoir, B]
-
-            preact = (self.W @ h.transpose(0,1) + self.W_in @ u_t.transpose(0,1) + fb)
-            h = torch.tanh(preact + self.noise * torch.randn_like(preact)).transpose(0,1)
-
-            # формируем вход для линейного слоя и получаем выход
-            lin_in = torch.cat([h, u_t], dim=-1)  # [B, n_reservoir + n_inputs]
-            y_t = self.W_out(lin_in)           # [B, n_outputs]
+            u_t = u_all[:, :, t]
+            preact = self.W @ h + self.W_in @ u_t + fb
+            noise_t = noise_vec[:, :, t]
+            h = torch.tanh(preact + noise_t)
+            lin_in = torch.cat([h.T, u_t.T], dim=-1)
+            y_t = self.W_out(lin_in)
             outputs.append(y_t)
+            fb = self.W_feedb @ y_t.T
 
         self.state = h.detach()
+        result_outputs = torch.stack(outputs, dim=1)
 
-        return torch.stack(outputs, dim=1)       # [B, T, n_outputs]
+        return result_outputs
+
+    
+    def save_weights(self, directory="model_params"):
+        os.makedirs(directory, exist_ok=True)
+        filename = f"{directory}/{self.model_name}_esn_model_" \
+                   f"res{self.n_reservoir}_in{self.n_inputs}_out{self.n_outputs}.pt"
+        torch.save(self.state_dict(), filename)
+        print(f"Model weights saved to {filename}")
+
+    def load_weights(self, directory="model_params"):
+        filename = f"{directory}/{self.model_name}_esn_model_" \
+                   f"res{self.n_reservoir}_in{self.n_inputs}_out{self.n_outputs}.pt"
+        if os.path.isfile(filename):
+            state_dict = torch.load(filename)
+            self.load_state_dict(state_dict)
+            print(f"Model weights loaded from {filename}")
+            return True
+        else:
+            print(f"No saved weights found at {filename}, initializing new parameters.")
+            return False

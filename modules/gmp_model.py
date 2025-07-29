@@ -30,8 +30,7 @@ class GMP(nn.Module):
         
 
     def count_params(self):
-        count_params = (self.Ka*self.La)+(self.Kb*self.Lb*self.Mb)+(self.Kc*self.Lc*self.Mc)
-        return count_params
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
     @utils.iq_handler
