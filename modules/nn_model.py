@@ -578,3 +578,92 @@ class TorchESN(nn.Module):
             outputs[n + 1] = self.out_activation(self.W_out @ x)
 
         return self._unscale_teacher(self.out_activation(outputs[1:]))
+    
+
+
+
+class DifferentiableESN(nn.Module):
+    def __init__(self,
+                 n_inputs: int,
+                 n_outputs: int,
+                 n_reservoir: int = 200,
+                 spectral_radius: float = 0.95,
+                 sparsity: float = 0.0,
+                 noise: float = 0.001,
+                 input_scaling: float | list[float] = 1.0,
+                 input_shift: float | list[float] = 0.0,
+                 random_state: int | None = None):
+        super().__init__()
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        self.n_reservoir = n_reservoir
+        self.noise = noise
+
+        # — входное масштабирование/сдвиг
+        self.register_buffer('input_scaling', self._make_vector(input_scaling, n_inputs))
+        self.register_buffer('input_shift',   self._make_vector(input_shift,   n_inputs))
+
+        # — reservoir
+        if isinstance(random_state, int):
+            torch.manual_seed(random_state)
+        W = torch.rand(n_reservoir, n_reservoir) - 0.5
+        mask = torch.rand_like(W) < sparsity
+        W[mask] = 0.0
+        eigs = torch.linalg.eigvals(W).abs()
+        W *= (spectral_radius / eigs.max().item())
+        # фиксированные веса reservoir
+        self.W = nn.Parameter(W, requires_grad=False)
+        self.W_in = nn.Parameter(torch.rand(n_reservoir, n_inputs)*2 - 1, requires_grad=False)
+        self.W_feedb = nn.Parameter(torch.rand(n_reservoir, n_outputs)*2 - 1, requires_grad=False)
+
+        # — выходной слой (единственный обучаемый)
+        self.W_out = nn.Linear(n_reservoir + n_inputs, n_outputs)
+
+        # внутреннее состояние, сбрасывается автоматически при forward
+        self.state: torch.Tensor | None = None
+
+    def _make_vector(self, v, length):
+        t = torch.tensor(v, dtype=torch.float32)
+        if t.ndim == 0:
+            return t.repeat(length)
+        if t.shape[0] != length:
+            raise ValueError(f'Expected length {length}, got {t.shape[0]}')
+        return t
+
+    def reset_state(self, batch_size: int, device: torch.device):
+        self.state = torch.zeros(batch_size, self.n_reservoir, device=device)
+
+    @utils.complex_handler
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: [batch, seq_len, n_inputs]
+        returns: [batch, seq_len, n_outputs]
+        """
+        B, T, _ = x.shape
+        # сброс состояния на каждый новый batch
+        self.reset_state(B, x.device)
+        h = self.state
+
+        outputs = []
+        for t in range(T):
+            u_t = x[:, t, :] * self.input_scaling + self.input_shift   # [B, n_inputs]
+
+            # reservoir update: h_t = tanh(W·h_{t-1} + W_in·u_t + W_feedb·y_{t-1})
+            if t == 0:
+                fb = torch.zeros(self.n_reservoir, B, device=x.device)
+            else:
+                # предыдущий выход
+                y_prev = outputs[-1].transpose(0,1)  # [n_outputs, B]
+                fb = self.W_feedb @ y_prev       # [n_reservoir, B]
+
+            preact = (self.W @ h.transpose(0,1) + self.W_in @ u_t.transpose(0,1) + fb)
+            h = torch.tanh(preact + self.noise * torch.randn_like(preact)).transpose(0,1)
+
+            # формируем вход для линейного слоя и получаем выход
+            lin_in = torch.cat([h, u_t], dim=-1)  # [B, n_reservoir + n_inputs]
+            y_t = self.W_out(lin_in)           # [B, n_outputs]
+            outputs.append(y_t)
+
+        self.state = h.detach()
+
+        return torch.stack(outputs, dim=1)       # [B, T, n_outputs]

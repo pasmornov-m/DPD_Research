@@ -37,19 +37,16 @@ def complex_to_iq(complex_signal):
 def complex_handler(forward_func):
     """Декоратор для автоматической обработки комплексных чисел в методах forward"""
     @functools.wraps(forward_func)
-    def wrapper(self, inputs, outputs=None, *args, **kwargs):
-        is_complex = inputs.is_complex() or (outputs.is_complex() if outputs is not None else False)
+    def wrapper(self, inputs, *args, **kwargs):
+        is_complex = inputs.is_complex()
 
         if is_complex:
             inputs = complex_to_iq(inputs)
-            outputs = complex_to_iq(outputs) if outputs is not None else None
             inputs = inputs.unsqueeze(0)
-            outputs = outputs.unsqueeze(0) if outputs is not None else None
         else:
             inputs = inputs
-            outputs = outputs if outputs is not None else None
         
-        result = forward_func(self, inputs, outputs, *args, **kwargs)
+        result = forward_func(self, inputs, *args, **kwargs)
         
         if result is None:
             return
