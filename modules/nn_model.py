@@ -536,15 +536,15 @@ class TorchESN(nn.Module):
 
         for n in range(1, N):
             states[n] = self._update(states[n - 1], inputs[n], outputs[n - 1], noise_vec[n])
+        
+        self.laststate = states[-1].detach()
+        self.lastinput = inputs[-1].detach()
+        self.lastoutput = outputs[-1].detach()
 
         extended = torch.cat([states, inputs], dim=1)
         transient = min(inputs.shape[1] // 10, 100)
         A = extended[transient:]
         B = self.inverse_out_activation(outputs[transient:])
-        
-        self.laststate = states[-1].detach()
-        self.lastinput = inputs[-1].detach()
-        self.lastoutput = outputs[-1].detach()
 
         W_out_T, *_ = torch.linalg.lstsq(A, B)
         self.W_out = nn.Parameter(W_out_T.T.detach(), requires_grad=True)
@@ -557,20 +557,20 @@ class TorchESN(nn.Module):
         noise_vec = self.noise * (torch.rand(N, self.n_reservoir) - 0.5)
 
         if continuation:
-            state = self.laststate.clone()
-            input0 = self.lastinput.clone()
-            output0 = self.lastoutput.clone()
+            prev_state = self.laststate.clone()
+            prev_input = self.lastinput.clone()
+            prev_output = self.lastoutput.clone()
         else:
-            state = torch.zeros(self.n_reservoir)
-            input0 = torch.zeros(self.n_inputs)
-            output0 = torch.zeros(self.n_outputs)
+            prev_state = torch.zeros(self.n_reservoir)
+            prev_input = torch.zeros(self.n_inputs)
+            prev_output = torch.zeros(self.n_outputs)
 
-        inputs = torch.cat([input0.unsqueeze(0), self._scale_inputs(inputs)], dim=0)
+        inputs = torch.cat([prev_input.unsqueeze(0), self._scale_inputs(inputs)], dim=0)
         states = torch.zeros(N + 1, self.n_reservoir)
         outputs = torch.zeros(N + 1, self.n_outputs)
 
-        states[0] = state
-        outputs[0] = output0
+        states[0] = prev_state
+        outputs[0] = prev_output
 
         for n in range(N):
             states[n + 1] = self._update(states[n], inputs[n + 1], outputs[n], noise_vec[n])
