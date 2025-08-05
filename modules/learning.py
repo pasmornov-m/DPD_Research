@@ -1,16 +1,17 @@
 import torch
 from torch import nn
 from modules.metrics import compute_mse
+from modules.utils import timer_decorator
 import time
 from datetime import timedelta
 
 
+@timer_decorator
 def ilc_signal(input_data, target_data, pa_model, epochs=100, learning_rate=0.1):
     u = torch.nn.Parameter(input_data.clone(), requires_grad=True)
     optimizer = torch.optim.Adam([u], lr=learning_rate)
 
     pa_model = pa_model.eval()
-    start = time.time()
     for epoch in range(epochs):
         optimizer.zero_grad()
         pa_output = pa_model.forward(u)
@@ -20,8 +21,6 @@ def ilc_signal(input_data, target_data, pa_model, epochs=100, learning_rate=0.1)
 
         if epoch%100==0 or epoch == epochs - 1:
             print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
-    elapsed = time.time() - start
-    print(f"Время расчёта ilc_signal: {timedelta(seconds=round(elapsed))}")
     return u.detach()
 
 
@@ -62,6 +61,7 @@ def net_eval(net, dataloader, criterion, metric_criterion=None):
     return avg_loss, avg_metric_loss
 
 
+@timer_decorator
 def train(net, 
           criterion, 
           optimizer,
@@ -71,7 +71,6 @@ def train(net,
           metric_criterion,
           grad_clip_val=0):
     print("===Start training===")
-    start = time.time()
     for epoch in range(n_epochs):
         net, train_loss = net_train(net=net,
                         optimizer=optimizer,
@@ -87,8 +86,6 @@ def train(net,
         if epoch % 1 == 0 or epoch == n_epochs - 1:
             print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}")
 
-    elapsed = time.time() - start
-    print(f"Время обучения: {timedelta(seconds=round(elapsed))}")
     print("===Training complete===")
 
 

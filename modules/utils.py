@@ -2,6 +2,8 @@ import torch
 from torch import nn
 import numpy as np
 import functools
+import time
+from datetime import timedelta
 
 
 def to_torch_tensor(data):
@@ -106,6 +108,17 @@ def complex_handler_np(func):
         if is_complex:
             result = iq_to_complex(result)
         
+        return result
+    return wrapper
+
+
+def timer_decorator(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        elapsed = time.time() - start
+        print(f"Выполнение заняло: {timedelta(seconds=round(elapsed))}")
         return result
     return wrapper
 
