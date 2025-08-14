@@ -152,7 +152,7 @@ class CustomTCN(TCN):
         os.makedirs(directory, exist_ok=True)
         filename = (
             f"{directory}/{self.model_name}_tcn_model_"
-            f"ch{len(self.num_channels)}_ks{self.kernel_size}_"
+            f"ch{self.num_channels}_ks{self.kernel_size}_"
             f"in{self.num_inputs}_out{self.output_projection}.pt"
         )
         torch.save(self.state_dict(), filename)
@@ -161,7 +161,7 @@ class CustomTCN(TCN):
     def load_weights(self, directory="model_params"):
         filename = (
             f"{directory}/{self.model_name}_tcn_model_"
-            f"ch{len(self.num_channels)}_ks{self.kernel_size}_"
+            f"ch{self.num_channels}_ks{self.kernel_size}_"
             f"in{self.num_inputs}_out{self.output_projection}.pt"
         )
         if os.path.isfile(filename):
@@ -365,7 +365,7 @@ class TorchESN(nn.Module):
 
 
 
-class DifferentiableESN(nn.Module):
+class DiffESN(nn.Module):
     def __init__(self,
                  n_inputs: int,
                  n_outputs: int,
@@ -393,23 +393,34 @@ class DifferentiableESN(nn.Module):
         mask = torch.rand_like(W) < sparsity
         W[mask] = 0.0
         eigs = torch.linalg.eigvals(W).abs()
+        
         W *= (spectral_radius / eigs.max().item())
         self.register_buffer('W', W)
-        
         W_in = torch.rand(n_reservoir, n_inputs)*2 - 1
         self.register_buffer('W_in', W_in)
-        
-        # W_feedb = torch.rand(n_reservoir, n_outputs)*2 - 1
-        # self.register_buffer('W_feedb', W_feedb)
-        
-        # self.W = nn.Parameter(W, requires_grad=False)
-        # self.W_in = nn.Parameter(torch.rand(n_reservoir, n_inputs)*2 - 1, requires_grad=False)
-        # self.W_feedb = nn.Parameter(torch.rand(n_reservoir, n_outputs)*2 - 1, requires_grad=False)
 
-        self.W_out = nn.Linear(n_reservoir + n_inputs, n_outputs)
+        # self.W_out = nn.Linear(n_reservoir + n_inputs, n_outputs)
 
         self.bias = nn.Parameter(0.001 * torch.randn(self.n_reservoir, 1))
+        
         self.state = None
+        
+        self.readout = self._make_readout(
+            input_dim=self.n_reservoir + self.n_inputs,
+            output_dim=self.n_outputs,
+            hidden_layers=[16]
+            )
+
+    
+    def _make_readout(self, input_dim: int, output_dim: int, hidden_layers: list[int]):
+        layers = []
+        dims = [input_dim] + hidden_layers + [output_dim]
+        for i in range(len(dims) - 2):
+            layers.append(nn.Linear(dims[i], dims[i+1]))
+            layers.append(nn.Tanh())
+        layers.append(nn.Linear(dims[-2], dims[-1]))
+        return nn.Sequential(*layers)
+
 
     def _make_vector(self, v, length):
         t = torch.tensor(v, dtype=torch.float32)
@@ -438,25 +449,21 @@ class DifferentiableESN(nn.Module):
         B, T, _ = x.shape
         self.reset_state(B)
         h = self.state
-        
         bias = self.bias.expand(-1, B)
-
         noise_vec = self.noise * torch.randn(self.n_reservoir, B, T)
         u_all = (x * self.input_scaling + self.input_shift).transpose(1, 2)
         u_all = u_all.permute(1, 0, 2)
 
         outputs = []
-        # fb = torch.zeros(self.n_reservoir, B)
         for t in range(T):
             u_t = u_all[:, :, t]
-            # preact = self.W @ h + self.W_in @ u_t + fb
             preact = self.W @ h + self.W_in @ u_t + bias
             noise_t = noise_vec[:, :, t]
             h = torch.tanh(preact + noise_t)
             lin_in = torch.cat([h.T, u_t.T], dim=-1)
-            y_t = self.W_out(lin_in)
+            y_t = self.readout(lin_in)
+            # y_t = self.W_out(lin_in)
             outputs.append(y_t)
-            # fb = self.W_feedb @ y_t.T
 
         self.state = h.detach()
         result_outputs = torch.stack(outputs, dim=1)
