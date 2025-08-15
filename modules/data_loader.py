@@ -2,10 +2,11 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import polars as pl
 import json
+from typing import Dict, Any
 from modules import utils, metrics
 
 
-def load_csv_to_tensor(file_path):
+def load_csv_to_tensor(file_path: str) -> torch.Tensor:
     data = pl.read_csv(file_path)
     required_columns = {'I', 'Q'}
     if not required_columns.issubset(data.columns):
@@ -17,7 +18,7 @@ def load_csv_to_tensor(file_path):
     return torch.tensor(i_values + 1j * q_values, dtype=torch.cfloat)
 
 
-def load_data(file_path):
+def load_data(file_path: str) -> Dict[str, Any]:
     with open(f'{file_path}/spec.json') as json_file:
         config = json.load(json_file)
     return {

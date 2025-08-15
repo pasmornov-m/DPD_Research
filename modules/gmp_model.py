@@ -5,6 +5,12 @@ from modules import utils
 
 
 class GMP(nn.Module):
+    """
+    Generalized Memory Polynomial with complex numbers stored as [N].
+    Input: x : [N]  (cfloat)
+    Output: y : [N] (cfloat)
+    Coefficients: a: [K_a, L_a], b: [K_b, L_b, M_b], c: [K_c, L_c, M_c]
+    """
     def __init__(self, Ka, La, Kb, Lb, Mb, Kc, Lc, Mc, model_name=None):
         super().__init__()
         self.Ka, self.La = Ka, La
@@ -33,7 +39,7 @@ class GMP(nn.Module):
 
 
     @utils.iq_handler
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = self._compute_terms(x)
         return y
 

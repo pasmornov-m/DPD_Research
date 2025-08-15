@@ -3,6 +3,7 @@ from torch import nn
 import numpy as np
 from scipy.signal import welch, get_window, lfilter
 from modules.utils import to_torch_tensor, iq_to_complex
+from typing import Tuple
 
 
 def compute_mse(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -44,9 +45,8 @@ def compute_nmse(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return 10 * torch.log10(mse / energy)
 
 
-def calculate_am_am(input_data, output_data):
+def calculate_am_am(input_data: torch.Tensor, output_data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     assert input_data.shape == output_data.shape, "input_data and output_data must have the same shape"
-    input_data, output_data = map(to_torch_tensor, (input_data, output_data))
 
     input_amplitude = torch.abs(input_data)
     output_amplitude = torch.abs(output_data)
@@ -55,9 +55,8 @@ def calculate_am_am(input_data, output_data):
     return input_amplitude, output_amplitude
 
 
-def calculate_am_pm(input_data, output_data):
+def calculate_am_pm(input_data: torch.Tensor, output_data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     assert input_data.shape == output_data.shape, "input_data and output_data must have the same shape"
-    input_data, output_data = map(to_torch_tensor, (input_data, output_data))
     
     input_amplitude = torch.abs(input_data)
     valid_indices = input_amplitude > 1e-20
@@ -80,14 +79,14 @@ def calculate_am_pm(input_data, output_data):
     return input_amplitude, phase_difference
 
 
-def get_amplitude(data):
+def get_amplitude(data: torch.Tensor) -> torch.Tensor:
     data = to_torch_tensor(data)
     power = data.real**2 + data.imag**2
     amplitude = torch.sqrt(power)
     return amplitude
 
 
-def calculate_gain_complex(input_data, output_data):
+def calculate_gain_complex(input_data: torch.Tensor, output_data: torch.Tensor) -> torch.Tensor:
     assert input_data.shape == output_data.shape, "input_data and output_data must have the same shape"
     if not input_data.is_complex():
         input_data = iq_to_complex(input_data)
@@ -99,7 +98,7 @@ def calculate_gain_complex(input_data, output_data):
     return target_gain
 
 
-def compute_signal_power(signal):
+def compute_signal_power(signal: torch.Tensor) -> torch.Tensor:
     power = torch.mean(torch.abs(signal) ** 2)
     return power
 
