@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import os
+from typing import Tuple
 from modules import utils
 
 
@@ -134,14 +135,23 @@ class BatchGMP(nn.Module):
         self.Kc, self.Lc, self.Mc = Kc, Lc, Mc
         self.model_name = model_name
         self.class_name = self.__class__.__name__
+        
+        self.dtype = torch.float32
 
-        self.a = nn.Parameter(0.001 * torch.randn((Ka, La, 2), dtype=torch.float32))
-        self.b = nn.Parameter(0.001 * torch.randn((Kb, Lb, Mb, 2), dtype=torch.float32))
-        self.c = nn.Parameter(0.001 * torch.randn((Kc, Lc, Mc, 2), dtype=torch.float32))
+        self.a = nn.Parameter(0.001 * torch.randn((Ka, La, 2), dtype=self.dtype))
+        self.b = nn.Parameter(0.001 * torch.randn((Kb, Lb, Mb, 2), dtype=self.dtype))
+        self.c = nn.Parameter(0.001 * torch.randn((Kc, Lc, Mc, 2), dtype=self.dtype))
 
-        self.register_buffer('powers_Ka', torch.arange(Ka, dtype=torch.float32))
-        self.register_buffer('powers_Kb', torch.arange(Kb, dtype=torch.float32))
-        self.register_buffer('powers_Kc', torch.arange(Kc, dtype=torch.float32))
+        self.register_buffer('powers_Ka', torch.arange(Ka, dtype=self.dtype))
+        self.register_buffer('powers_Kb', torch.arange(Kb, dtype=self.dtype))
+        self.register_buffer('powers_Kc', torch.arange(Kc, dtype=self.dtype))
+        
+        self.register_buffer('arange_La', torch.arange(La, dtype=self.dtype)[:, None])
+        self.register_buffer('arange_Lb', torch.arange(Lb, dtype=self.dtype)[:, None])
+        self.register_buffer('arange_Lc', torch.arange(Lc, dtype=self.dtype)[:, None])
+        
+        self.register_buffer('arange_Mb', torch.arange(Mb, dtype=self.dtype)[None, None, :])
+        self.register_buffer('arange_Mc', torch.arange(Mc, dtype=self.dtype)[None, None, :])
     
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
@@ -162,6 +172,26 @@ class BatchGMP(nn.Module):
 
     def count_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+    
+    @staticmethod 
+    def separate_re_im(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        x_re = x[..., 0]
+        x_im = x[..., 1]
+        return x_re, x_im
+    
+    @staticmethod
+    def abs_complex(x: torch.Tensor) -> torch.Tensor:
+        return torch.sqrt(x[..., 0] ** 2 + x[..., 1] ** 2)
+    
+    def _compute_L_indices(self, arange_L, t_idx, T, B):
+        idx_L = (t_idx[None, :] - arange_L).clamp(0, T - 1).long()
+        idx_L = idx_L.unsqueeze(0).unsqueeze(-1).expand(B, -1, -1, 2)
+        return idx_L
+    
+    def _compute_M_indices(self, arange_L, arange_M, M, t_idx, B):
+        idx_M = (t_idx[None, :, None] - arange_L[:, None] - arange_M).clamp(0, M - 1).long()
+        idx_M = idx_M.unsqueeze(0).unsqueeze(-1).expand(B, -1, -1, -1, 2)
+        return idx_M
 
     @utils.complex_handler
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -171,100 +201,62 @@ class BatchGMP(nn.Module):
         """
         if x.dim() != 3 or x.shape[-1] != 2:
             raise ValueError(f"Input must be [B, T, 2] (re,im), but expected {x.shape}")
-
-        device = x.device
-        B, T, _ = x.shape
-
-        t_idx = torch.arange(T, device=device)
-        idx_La = (t_idx[None, :] - torch.arange(self.La, device=device)[:, None]).clamp(0, T - 1).long()
-        idx_Lb = (t_idx[None, :] - torch.arange(self.Lb, device=device)[:, None]).clamp(0, T - 1).long()
-        idx_Lc = (t_idx[None, :] - torch.arange(self.Lc, device=device)[:, None]).clamp(0, T - 1).long()
-
-        idx_Mb = (
-            t_idx[None, :, None]
-            - torch.arange(self.Lb, device=device)[:, None, None]
-            - torch.arange(self.Mb, device=device)[None, None, :]
-        ).clamp(0, T - 1).long()
-
-        idx_Mc = (
-            t_idx[None, :, None]
-            - torch.arange(self.Lc, device=device)[:, None, None]
-            + torch.arange(self.Mc, device=device)[None, None, :]
-        ).clamp(0, T - 1).long()
         
-        idx_La_b = idx_La.unsqueeze(0).expand(B, -1, -1)
-        idx_Lb_b = idx_Lb.unsqueeze(0).expand(B, -1, -1)
-        idx_Lc_b = idx_Lc.unsqueeze(0).expand(B, -1, -1)
-
-        idx_Mb_b = idx_Mb.unsqueeze(0).expand(B, -1, -1, -1)
-        idx_Mc_b = idx_Mc.unsqueeze(0).expand(B, -1, -1, -1)
-
+        B, T, _ = x.shape
+        t_idx = torch.arange(T)
+        
+        idx_La_idx = self._compute_L_indices(self.arange_La, t_idx, T, B) 
+        idx_Lb_idx = self._compute_L_indices(self.arange_Lb, t_idx, T, B)
+        idx_Lc_idx = self._compute_L_indices(self.arange_Lc, t_idx, T, B)
+        
+        idx_Mb_idx = self._compute_M_indices(self.arange_Lb, self.arange_Mb, self.Mb, t_idx, B)
+        idx_Mc_idx = self._compute_M_indices(self.arange_Lc, self.arange_Mc, self.Mc, t_idx, B)
+        
         x_unsqz_1 = x.unsqueeze(1)
         x_exp_La = x_unsqz_1.expand(-1, self.La, -1, -1)
         x_exp_Lb = x_unsqz_1.expand(-1, self.Lb, -1, -1)
         x_exp_Lc = x_unsqz_1.expand(-1, self.Lc, -1, -1)
-
-        idx_La_idx = idx_La_b.unsqueeze(-1).expand(-1, -1, -1, 2)
-        idx_Lb_idx = idx_Lb_b.unsqueeze(-1).expand(-1, -1, -1, 2)
-        idx_Lc_idx = idx_Lc_b.unsqueeze(-1).expand(-1, -1, -1, 2)
         
         x_La = torch.gather(x_exp_La, dim=2, index=idx_La_idx)
         x_Lb = torch.gather(x_exp_Lb, dim=2, index=idx_Lb_idx)
         x_Lc = torch.gather(x_exp_Lc, dim=2, index=idx_Lc_idx)
 
         x_exp_for_Mb = x_exp_Lb.unsqueeze(3).expand(-1, -1, -1, self.Mb, -1)
-
-        idx_Mb_idx = idx_Mb_b.unsqueeze(-1).expand(-1, -1, -1, -1, 2)
-
-        idx_Mb_idx = idx_Mb_idx.clamp(0, x_exp_for_Mb.size(3) - 1)
+        x_exp_for_Mc = x_exp_Lc.unsqueeze(3).expand(-1, -1, -1, self.Mc, -1)
+        
         x_Mb = torch.gather(x_exp_for_Mb, dim=3, index=idx_Mb_idx)
-
-        x_exp_for_Mc = x_exp_Lc.unsqueeze(3)
-        idx_Mc_idx = idx_Mc_b.unsqueeze(-1).expand(-1, -1, -1, -1, 2)
-        idx_Mc_idx = idx_Mc_idx.clamp(0, x_exp_for_Mc.size(3) - 1)
         x_Mc = torch.gather(x_exp_for_Mc, dim=3, index=idx_Mc_idx)
 
-        abs_a = torch.sqrt(x_La[..., 0] ** 2 + x_La[..., 1] ** 2)
-        abs_b = torch.sqrt(x_Mb[..., 0] ** 2 + x_Mb[..., 1] ** 2)
-        abs_c = torch.sqrt(x_Mc[..., 0] ** 2 + x_Mc[..., 1] ** 2)
+        abs_a = self.abs_complex(x_La)
+        abs_b = self.abs_complex(x_Mb)
+        abs_c = self.abs_complex(x_Mc)
 
-        abs_powers_a = (abs_a.unsqueeze(-1) ** self.powers_Ka.to(device))
-        abs_powers_b = (abs_b.unsqueeze(-1) ** self.powers_Kb.to(device))
-        abs_powers_c = (abs_c.unsqueeze(-1) ** self.powers_Kc.to(device))
+        abs_powers_a = (abs_a.unsqueeze(-1) ** self.powers_Ka).unsqueeze(-1)
+        abs_powers_b = (abs_b.unsqueeze(-1) ** self.powers_Kb).unsqueeze(-1)
+        abs_powers_c = (abs_c.unsqueeze(-1) ** self.powers_Kc).unsqueeze(-1)
 
         x_La = x_La.unsqueeze(3)
-        x_scaled_a = x_La * abs_powers_a.unsqueeze(-1)
-
         x_Lb = x_Lb.unsqueeze(3).unsqueeze(4)
-        abs_powers_b = abs_powers_b.unsqueeze(-1)
-        x_scaled_b = x_Lb * abs_powers_b
-
         x_Lc = x_Lc.unsqueeze(3).unsqueeze(4)
-        abs_powers_c = abs_powers_c.unsqueeze(-1)
+
+        x_scaled_a = x_La * abs_powers_a
+        x_scaled_b = x_Lb * abs_powers_b
         x_scaled_c = x_Lc * abs_powers_c
 
-        a_re = self.a[..., 0]
-        a_im = self.a[..., 1]
-
-        x_a_re = x_scaled_a[..., 0]
-        x_a_im = x_scaled_a[..., 1]
+        a_re, a_im = self.separate_re_im(self.a)
+        b_re, b_im = self.separate_re_im(self.b)
+        c_re, c_im = self.separate_re_im(self.c)
+        
+        x_a_re, x_a_im = self.separate_re_im(x_scaled_a)
+        x_b_re, x_b_im = self.separate_re_im(x_scaled_b)
+        x_c_re, x_c_im = self.separate_re_im(x_scaled_c)
 
         term_a_re = torch.einsum('kl,bltk->bt', a_re, x_a_re) - torch.einsum('kl,bltk->bt', a_im, x_a_im)
         term_a_im = torch.einsum('kl,bltk->bt', a_re, x_a_im) + torch.einsum('kl,bltk->bt', a_im, x_a_re)
 
-        b_re = self.b[..., 0]
-        b_im = self.b[..., 1]
-        x_b_re = x_scaled_b[..., 0]
-        x_b_im = x_scaled_b[..., 1]
-
         term_b_re = torch.einsum('klm,bltmk->bt', b_re, x_b_re) - torch.einsum('klm,bltmk->bt', b_im, x_b_im)
         term_b_im = torch.einsum('klm,bltmk->bt', b_re, x_b_im) + torch.einsum('klm,bltmk->bt', b_im, x_b_re)
-
-        c_re = self.c[..., 0]
-        c_im = self.c[..., 1]
-        x_c_re = x_scaled_c[..., 0]
-        x_c_im = x_scaled_c[..., 1]
-
+        
         term_c_re = torch.einsum('klm,bltmk->bt', c_re, x_c_re) - torch.einsum('klm,bltmk->bt', c_im, x_c_im)
         term_c_im = torch.einsum('klm,bltmk->bt', c_re, x_c_im) + torch.einsum('klm,bltmk->bt', c_im, x_c_re)
 

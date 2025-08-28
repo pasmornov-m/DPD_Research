@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from modules import data_loader, metrics
-from modules.gmp_model import GMP
+from modules.gmp_model import BatchGMP
 from modules.pipelines import SimplePipeline, SnrPipeline
 
 
@@ -178,7 +178,7 @@ class PA_DPD_FSM:
         
         self.gmp_pipeline = SimplePipeline(data_dict=self.data_dict, 
                               train_props=self.gmp_train_props, 
-                              base_model=GMP)
+                              base_model=BatchGMP)
 
         self.state = FSM_State.RUN_PA
 
@@ -290,7 +290,7 @@ class PA_DPD_FSM:
         
         gmp_degree = {"gmp_degree": self.gmp_degree}
         
-        self.snr_metrics_runner = SnrPipeline(base_model=GMP, 
+        self.snr_metrics_runner = SnrPipeline(base_model=BatchGMP, 
                                               input_model_params=gmp_degree,
                                               data_dict=self.data_dict, 
                                               snr_params=self.snr_params)

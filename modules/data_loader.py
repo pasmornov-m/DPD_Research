@@ -102,8 +102,9 @@ def build_dataloaders(data_dict, frame_length, batch_size, batch_size_eval, arch
         y_val = x_val
     elif arch == "ilc":
         y_train = utils.complex_to_iq(data_dict["ilc_train_output"])
-        if data_dict["ilc_val_output"] is not None:
-            y_val = utils.complex_to_iq(data_dict["ilc_val_output"])
+        ilc_val_output = data_dict.get("ilc_val_output")
+        if ilc_val_output is not None:
+            y_val = utils.complex_to_iq(ilc_val_output)
         else:
             y_val = y_train
         

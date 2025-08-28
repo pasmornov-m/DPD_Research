@@ -1,6 +1,6 @@
 from modules import metrics, learning, params, data_loader, utils
-from modules.gmp_model import GMP
-from modules.nn_model import GRU
+from modules.gmp_model import ClassicGMP, BatchGMP
+from modules.nn_model import GRU, LSTM, DenseNetRegressor, TCN, DiffESN
 from modules.config import GMP_GRAD_CLIP_VAL, GMP_U_K_LR, GMP_U_K_EPOCHS, NN_FRAME_LENGTH, NN_BATCH_SIZE, NN_BATCH_SIZE_EVAL, NN_GRAD_CLIP_VAL, NN_U_K_LR, NN_U_K_EPOCHS
 import torch
 from torch import nn
@@ -13,7 +13,11 @@ class SimplePipeline():
     def __init__(self, data_dict, train_props, base_model):
         
         self.base_model = base_model
-        self.pa_model = None
+        pa_model = data_dict.get("pa_model")
+        if pa_model is not None:
+            self.pa_model = pa_model
+        else:
+            self.pa_model = None
         
         self.data = data_dict
         cfg = data_dict["config"]
@@ -27,13 +31,14 @@ class SimplePipeline():
         self.y_val = data_dict["val_output"]
 
         self.gain = metrics.calculate_gain_complex(self.x_train, self.y_train)
-        print(f"[PA] Calculated gain: {self.gain:.2f}")
+        # print(f"[PA] Calculated gain: {self.gain:.2f}")
         self.y_train_target = self.gain * self.x_train
         self.y_val_target = self.gain * self.x_val
         
         self.u_k_train = None
+        self.u_k_val = None
         
-        if self.base_model.__name__ == "GMP":
+        if issubclass(self.base_model, (ClassicGMP, BatchGMP)):
             self.model_params = params.make_gmp_params(Ka=train_props["gmp_degree"],
                                                        La=train_props["gmp_degree"],
                                                        Kb=train_props["gmp_degree"],
@@ -42,9 +47,21 @@ class SimplePipeline():
                                                        Kc=train_props["gmp_degree"],
                                                        Lc=train_props["gmp_degree"],
                                                        Mc=train_props["gmp_degree"])
-        else:
+        elif issubclass(self.base_model, (GRU, LSTM)):
             self.model_params = {"hidden_size": train_props["hidden_size"], 
                                  "num_layers": train_props["num_layers"]}
+        elif issubclass(self.base_model, DenseNetRegressor):
+            self.model_params = {"blocks": train_props["blocks"]}
+        elif issubclass(self.base_model, TCN):
+            self.model_params = {"num_channels": train_props["num_channels"], 
+                                 "kernel_size": train_props["kernel_size"],
+                                 "dropout": train_props["dropout"]}
+        elif issubclass(self.base_model, DiffESN):
+            self.model_params = {"n_reservoir": train_props["n_reservoir"], 
+                                 "spectral_radius": train_props["spectral_radius"]}
+        else:
+            raise ValueError(f"Unsupported base_model: {self.base_model}")
+            
         self.lr = train_props["lr"]
         self.epochs = train_props["epochs"]
         self.acpr_meter = train_props["acpr_meter"]
@@ -74,7 +91,7 @@ class SimplePipeline():
         self._prepare_loaders()
     
     def _prepare_params(self):
-        if self.base_model.__name__ == "GMP":
+        if issubclass(self.base_model, ClassicGMP):
             self.grad_clip_val = GMP_GRAD_CLIP_VAL
             self.u_k_lr = GMP_U_K_LR
             self.u_k_epochs = GMP_U_K_EPOCHS
@@ -87,7 +104,7 @@ class SimplePipeline():
             self.u_k_epochs = NN_U_K_EPOCHS
     
     def _prepare_loaders(self):
-        if self.base_model.__name__ == "GMP":
+        if issubclass(self.base_model, ClassicGMP):
             self.pa_train_loader = [(self.x_train, self.y_train)]
             self.pa_val_loader = [(self.x_val, self.y_val)]
             self.dla_train_loader = [(self.x_train, self.y_train_target)]
@@ -147,8 +164,7 @@ class SimplePipeline():
         dpd_model = self.base_model(**self.model_params, model_name="dla")
         is_load = dpd_model.load_weights()
         casc_dla = utils.CascadeModel(model_1=dpd_model, 
-                                        model_2=self.pa_model, 
-                                        cascade_type="dla")
+                                        model_2=self.pa_model)
         optimizer = torch.optim.Adam(casc_dla.parameters(), lr=self.lr)
 
         time_train = 0
@@ -220,12 +236,15 @@ class SimplePipeline():
         
         if self.u_k_train is None:
             self.u_k_train = learning.ilc_signal(self.x_train, self.y_train_target, self.pa_model, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
+        if self.u_k_val is None:
+            self.u_k_val = learning.ilc_signal(self.x_val, self.y_val_target, self.pa_model, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
         self.u_k_pa = self.pa_model.forward(self.u_k_train).detach()
         
         elapsed = time.time() - start
         time_train = timedelta(seconds=round(elapsed))
 
         self.data["ilc_train_output"] = self.u_k_train
+        self.data["ilc_val_output"] = self.u_k_val
         ilc_nmse_uk = metrics.compute_nmse(self.u_k_pa, self.y_train_target)
         ilc_acpr_uk = metrics.calculate_acpr(self.u_k_pa, self.acpr_meter)
         print(f"[UK] NMSE: {ilc_nmse_uk:.2f}, ACPR: {ilc_acpr_uk}")
@@ -238,7 +257,7 @@ class SimplePipeline():
             "time_train": time_train
         }
         
-        if self.base_model.__name__ == "GMP":
+        if issubclass(self.base_model, ClassicGMP):
             self.ilc_train_loader = [(self.x_train, self.u_k_train)]
             self.ilc_val_loader = self.ilc_train_loader
         else:
@@ -281,7 +300,8 @@ class SimplePipeline():
         }
     
     def run(self):
-        self.run_pa()
+        if self.pa_model is None:
+            self.run_pa()
         self.run_dla()
         self.run_ila()
         self.run_ilc()
@@ -358,7 +378,7 @@ class SnrPipeline:
         self._prepare_loaders()
     
     def _prepare_params(self):
-        if self.base_model.__name__ == "GMP":
+        if issubclass(self.base_model, (ClassicGMP, BatchGMP)):
             self.model_params = params.make_gmp_params(Ka=self.input_model_params["gmp_degree"],
                                                        La=self.input_model_params["gmp_degree"],
                                                        Kb=self.input_model_params["gmp_degree"],
@@ -367,9 +387,6 @@ class SnrPipeline:
                                                        Kc=self.input_model_params["gmp_degree"],
                                                        Lc=self.input_model_params["gmp_degree"],
                                                        Mc=self.input_model_params["gmp_degree"])
-            self.grad_clip_val = GMP_GRAD_CLIP_VAL
-            self.u_k_lr = GMP_U_K_LR
-            self.u_k_epochs = GMP_U_K_EPOCHS
         else:
             self.model_params = {"hidden_size": self.input_model_params["hidden_size"], 
                                  "num_layers": self.input_model_params["num_layers"]}
@@ -379,9 +396,21 @@ class SnrPipeline:
             self.grad_clip_val = NN_GRAD_CLIP_VAL
             self.u_k_lr = NN_U_K_LR
             self.u_k_epochs = NN_U_K_EPOCHS
+        
+        if issubclass(self.base_model, ClassicGMP):
+            self.grad_clip_val = GMP_GRAD_CLIP_VAL
+            self.u_k_lr = GMP_U_K_LR
+            self.u_k_epochs = GMP_U_K_EPOCHS
+        else:
+            self.frame_length = NN_FRAME_LENGTH
+            self.batch_size = NN_BATCH_SIZE
+            self.batch_size_eval = NN_BATCH_SIZE_EVAL
+            self.grad_clip_val = NN_GRAD_CLIP_VAL
+            self.u_k_lr = NN_U_K_LR
+            self.u_k_epochs = NN_U_K_EPOCHS
     
     def _prepare_loaders(self):
-        if self.base_model.__name__ == "GMP":
+        if issubclass(self.base_model, ClassicGMP):
             self.dla_train_loader = [(self.x_train, self.y_train_target)]
             self.dla_val_loader = [(self.x_val, self.y_val_target)]
             self.ila_train_loader = [(self.x_train, self.x_train)]
@@ -437,7 +466,7 @@ class SnrPipeline:
             dpd_model = self.base_model(**self.model_params)
             casc_pa_noise = self._create_pa_noise_cascade(snr)
             casc_ila_train = utils.CascadeModel(model_1=casc_pa_noise, model_2=dpd_model, gain=self.gain, cascade_type="ila")
-            casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
+            casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=casc_pa_noise)
             optimizer = torch.optim.Adam(casc_ila_train.parameters(), lr=self.lr)
 
             learning.train(net=casc_ila_train, 
@@ -471,7 +500,7 @@ class SnrPipeline:
             self.data_dict["ilc_train_output"] = self.u_k_train
             # self.data_dict["ilc_val_output"] = self.u_k_val
             
-            if self.base_model.__name__ == "GMP":
+            if issubclass(self.base_model, ClassicGMP):
                 self.ilc_train_loader = [(self.x_train, self.u_k_train)]
                 # self.ilc_val_loader = [(self.x_val, self.u_k_val)]
                 self.ilc_val_loader = self.ilc_train_loader

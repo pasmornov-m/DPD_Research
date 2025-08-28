@@ -1,33 +1,74 @@
-## Описание
+# Исследование методов цифровой коррекции (DPD)
 
-Проект реализует сравнительный анализ различных архитектур обучения цифровых корректоров (DPD) для компенсации нелинейных искажений в СВЧ усилителях мощности на основе обобщённой полиномиальной модели с памятью (GMP). В работе рассматриваются три подхода:
+В этом репозитории представлен процесс моделирования и анализа качества **Digital Predistortion (DPD)** с использованием различных моделей машинного обучения.
 
-* **Прямая архитектура обучения (DLA)**
-* **Обратная архитектура обучения (ILA)**
-* **Итеративный контроль обучения (ILC)**
+## Реализованные модели:
 
-Реализованы функции загрузки и подготовки данных, обучение моделей, применение предыскажения, вычисление метрик (NMSE, ACPR), а также визуализация результатов (спектры, AM/AM и AM/PM характеристики, зависимости метрик от отношения сигнал/шум).
+* **GMP** — *Generalized Memory Polynomial* (полиномиальная модель с учётом памяти)
+* **GRU** — *Gated Recurrent Unit* (RNN)
+* **LSTM** — *Long Short-Term Memory* (RNN)
+* **TCN** — *Temporal Convolutional Network* (CNN)
+* **DenseNet** — *Densely Connected Convolutional Network* (CNN)
+* **ESN** — *Echo State Network* (Reservoir Computing)
 
-Основная цель — провести симуляционное моделирование и сравнить эффективность DLA, ILA и ILC при различных условиях (уровень шума, параметры модели).
+## Архитектуры обучения DPD:
+
+После выбора модели реализуются три подхода к обучению цифровых корректоров:
+
+* **DLA** — *Direct Learning Architecture* (прямая архитектура обучения)
+* **ILA** — *Indirect Learning Architecture* (обратная архитектура обучения)
+* **ILC** — *Iterative Learning Control* (итеративный контроль обучения)
+
+## Метрики и визуализация:
+
+Обучение проводится с использованием выбранной модели и выбранной архитектуры.
+Для сравнения качества работы используются:
+
+* Численные метрики: **NMSE** (Normalized Mean Squared Error), **ACPR** (Adjacent Channel Power Ratio)
+* Визуализация: **PSD** (Power Spectral Density)
+
+## Цели исследования:
+
+* Провести симуляционное моделирование различных моделей и архитектур DPD
+* Сравнить эффективность DLA, ILA и ILC в различных условиях (уровень шума, параметры модели)
+* Исследовать влияние отношения сигнал/шум на эффективность работы корректоров
 
 
-## Основные возможности
+---
 
-* Загрузка и подготовка тренировочных и валидационных данных сигнала (например, OFDM сигнал с заданной полосой и частотой дискретизации).
-* Построение и оптимизация обобщённой полиномиальной модели с памятью (GMP) для моделирования усилителя мощности и корректора.
-* Реализация алгоритмов обучения корректоров:
 
-  * Прямая архитектура обучения (DLA) через минимизацию ошибки между желаемым выходом и реальным ответом усилителя.
-  * Обратная архитектура обучения (ILA) через построение обратной модели усилителя по выходному сигналу.
-  * Итеративный контроль обучения (ILC) через итеративную оптимизацию входного сигнала до достижения нужной точности, с последующей идентификацией модели корректора.
-* Вычисление ключевых метрик:
+# Research on Digital Predistortion (DPD) Methods
 
-  * **NMSE (Normalized Mean Squared Error)** между выходом модели и целевым линейным выходом.
-  * **ACPR (Adjacent Channel Power Ratio)** для оценки внеполосного излучения.
-* Влияние шума: исследование зависимости эффективности алгоритмов от отношения сигнал/шум (SNR).
-* Визуализация результатов:
+This repository presents the process of modeling and analyzing the performance of **Digital Predistortion (DPD)** using various machine learning models.
 
-  * Спектральная плотность мощности входного, выходного и скорректированного сигналов.
-  * AM/AM и AM/PM характеристики усилителя и корректируемых сигналов.
-  * Графики зависимости NMSE и ACPR от SNR для разных методов.
-* Сохранение и загрузка коэффициентов моделей, чтобы избегать повторных долгих оптимизаций.
+## Implemented Models:
+
+* **GMP** — *Generalized Memory Polynomial* (polynomial model with memory effects)
+* **GRU** — *Gated Recurrent Unit* (RNN)
+* **LSTM** — *Long Short-Term Memory* (RNN)
+* **TCN** — *Temporal Convolutional Network* (CNN)
+* **DenseNet** — *Densely Connected Convolutional Network* (CNN)
+* **ESN** — *Echo State Network* (Reservoir Computing)
+
+## DPD Training Architectures:
+
+After selecting a model, three approaches to training digital predistorters are implemented:
+
+* **DLA** — *Direct Learning Architecture*
+* **ILA** — *Indirect Learning Architecture*
+* **ILC** — *Iterative Learning Control*
+
+## Metrics and Visualization:
+
+Training is performed using the selected model and architecture.
+The following evaluation methods are used:
+
+* Numerical metrics: **NMSE** (Normalized Mean Squared Error), **ACPR** (Adjacent Channel Power Ratio)
+* Visualization: **PSD** (Power Spectral Density)
+
+## Research Objectives:
+
+* Perform simulation-based modeling of different DPD models and architectures
+* Compare the effectiveness of DLA, ILA, and ILC under various conditions (noise level, model parameters)
+* Investigate the impact of the signal-to-noise ratio on predistorter performance
+

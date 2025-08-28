@@ -130,14 +130,22 @@ class LSTM(nn.Module):
 
 class CustomTCN(TCN):
     def __init__(self, model_name="custom_tcn", **kwargs):
-        super().__init__(**kwargs)
+        num_inputs = kwargs.pop("num_inputs", 2)
+        output_projection = kwargs.pop("output_projection", 2)
+        dropout = kwargs.pop("dropout", 0.0)
+        input_shape = kwargs.pop("input_shape", "NLC")
+        super().__init__(num_inputs=num_inputs,
+                         output_projection=output_projection,
+                         dropout=dropout,
+                         input_shape=input_shape,
+                         **kwargs)
         self.model_name = model_name
-        self.num_inputs = kwargs.get("num_inputs")
-        self.output_projection = kwargs.get("output_projection")
+        self.num_inputs = num_inputs
         self.num_channels = kwargs.get("num_channels")
+        self.output_projection = output_projection
         self.kernel_size = kwargs.get("kernel_size")
-        self.dropout = kwargs.get("dropout", 0.0)
-        self.input_shape = kwargs.get("input_shape", "NCL")
+        self.dropout = dropout
+        self.input_shape = input_shape
 
 
     @utils.complex_handler
@@ -367,8 +375,8 @@ class TorchESN(nn.Module):
 
 class DiffESN(nn.Module):
     def __init__(self,
-                 n_inputs: int,
-                 n_outputs: int,
+                 n_inputs: int = 2,
+                 n_outputs: int = 2,
                  n_reservoir: int = 200,
                  spectral_radius: float = 0.95,
                  sparsity: float = 0.0,
@@ -383,6 +391,7 @@ class DiffESN(nn.Module):
         self.n_reservoir = n_reservoir
         self.noise = noise
         self.model_name = model_name
+        self.class_name = self.__class__.__name__
 
         self.register_buffer('input_scaling', self._make_vector(input_scaling, n_inputs))
         self.register_buffer('input_shift', self._make_vector(input_shift, n_inputs))
@@ -399,17 +408,15 @@ class DiffESN(nn.Module):
         W_in = torch.rand(n_reservoir, n_inputs)*2 - 1
         self.register_buffer('W_in', W_in)
 
-        # self.W_out = nn.Linear(n_reservoir + n_inputs, n_outputs)
-
-        self.bias = nn.Parameter(0.001 * torch.randn(self.n_reservoir, 1))
+        self.W_out = nn.Linear(n_reservoir + n_inputs, n_outputs)
         
         self.state = None
         
-        self.readout = self._make_readout(
-            input_dim=self.n_reservoir + self.n_inputs,
-            output_dim=self.n_outputs,
-            hidden_layers=[16]
-            )
+        # self.readout = self._make_readout(
+        #     input_dim=self.n_reservoir + self.n_inputs,
+        #     output_dim=self.n_outputs,
+        #     hidden_layers=[16]
+        #     )
 
     
     def _make_readout(self, input_dim: int, output_dim: int, hidden_layers: list[int]):
@@ -449,7 +456,6 @@ class DiffESN(nn.Module):
         B, T, _ = x.shape
         self.reset_state(B)
         h = self.state
-        bias = self.bias.expand(-1, B)
         noise_vec = self.noise * torch.randn(self.n_reservoir, B, T)
         u_all = (x * self.input_scaling + self.input_shift).transpose(1, 2)
         u_all = u_all.permute(1, 0, 2)
@@ -457,12 +463,12 @@ class DiffESN(nn.Module):
         outputs = []
         for t in range(T):
             u_t = u_all[:, :, t]
-            preact = self.W @ h + self.W_in @ u_t + bias
+            preact = self.W @ h + self.W_in @ u_t
             noise_t = noise_vec[:, :, t]
             h = torch.tanh(preact + noise_t)
             lin_in = torch.cat([h.T, u_t.T], dim=-1)
-            y_t = self.readout(lin_in)
-            # y_t = self.W_out(lin_in)
+            # y_t = self.readout(lin_in)
+            y_t = self.W_out(lin_in)
             outputs.append(y_t)
 
         self.state = h.detach()
@@ -473,13 +479,13 @@ class DiffESN(nn.Module):
     
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
-        filename = f"{directory}/{self.model_name}_esn_model_" \
+        filename = f"{directory}/{self.model_name}_{self.class_name}_" \
                    f"res{self.n_reservoir}_in{self.n_inputs}_out{self.n_outputs}.pt"
         torch.save(self.state_dict(), filename)
         print(f"Model weights saved to {filename}")
 
     def load_weights(self, directory="model_params"):
-        filename = f"{directory}/{self.model_name}_esn_model_" \
+        filename = f"{directory}/{self.model_name}_{self.class_name}_" \
                    f"res{self.n_reservoir}_in{self.n_inputs}_out{self.n_outputs}.pt"
         if os.path.isfile(filename):
             state_dict = torch.load(filename)
@@ -522,8 +528,13 @@ class BuildingBlock(nn.Module):
 
 
 class DenseNetRegressor(nn.Module):
-    def __init__(self, blocks: int, input_dim: int = 2):
+    def __init__(self, blocks: int, input_dim: int = 2, model_name: str = "densenet"):
         super().__init__()
+        self.input_blocks = blocks
+        self.input_dim = input_dim
+        self.model_name = model_name
+        self.class_name = self.__class__.__name__
+        
         self.init_fc = nn.Linear(input_dim, input_dim)
         self.init_bn = nn.BatchNorm1d(input_dim)
         self.relu = nn.ReLU(inplace=True)
@@ -554,3 +565,21 @@ class DenseNetRegressor(nn.Module):
 
         return x_.view(B, T, -1)
 
+    def save_weights(self, directory="model_params"):
+        os.makedirs(directory, exist_ok=True)
+        filename = f"{directory}/{self.model_name}_{self.class_name}_" \
+                   f"blocks{self.input_blocks}_in{self.input_dim}.pt"
+        torch.save(self.state_dict(), filename)
+        print(f"Model weights saved to {filename}")
+
+    def load_weights(self, directory="model_params"):
+        filename = f"{directory}/{self.model_name}_{self.class_name}_" \
+                   f"blocks{self.input_blocks}_in{self.input_dim}.pt"
+        if os.path.isfile(filename):
+            state_dict = torch.load(filename)
+            self.load_state_dict(state_dict)
+            print(f"Model weights loaded from {filename}")
+            return True
+        else:
+            print(f"No saved weights found at {filename}, initializing new parameters.")
+            return False
