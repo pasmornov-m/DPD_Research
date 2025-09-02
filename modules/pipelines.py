@@ -38,33 +38,11 @@ class SimplePipeline():
         self.u_k_train = None
         self.u_k_val = None
         
-        if issubclass(self.base_model, (ClassicGMP, BatchGMP)):
-            self.model_params = params.make_gmp_params(Ka=train_props["gmp_degree"],
-                                                       La=train_props["gmp_degree"],
-                                                       Kb=train_props["gmp_degree"],
-                                                       Lb=train_props["gmp_degree"],
-                                                       Mb=train_props["gmp_degree"],
-                                                       Kc=train_props["gmp_degree"],
-                                                       Lc=train_props["gmp_degree"],
-                                                       Mc=train_props["gmp_degree"])
-        elif issubclass(self.base_model, (GRU, LSTM)):
-            self.model_params = {"hidden_size": train_props["hidden_size"], 
-                                 "num_layers": train_props["num_layers"]}
-        elif issubclass(self.base_model, DenseNetRegressor):
-            self.model_params = {"blocks": train_props["blocks"]}
-        elif issubclass(self.base_model, TCN):
-            self.model_params = {"num_channels": train_props["num_channels"], 
-                                 "kernel_size": train_props["kernel_size"],
-                                 "dropout": train_props["dropout"]}
-        elif issubclass(self.base_model, DiffESN):
-            self.model_params = {"n_reservoir": train_props["n_reservoir"], 
-                                 "spectral_radius": train_props["spectral_radius"]}
-        else:
-            raise ValueError(f"Unsupported base_model: {self.base_model}")
-            
-        self.lr = train_props["lr"]
-        self.epochs = train_props["epochs"]
-        self.acpr_meter = train_props["acpr_meter"]
+        self.model_params = {}
+        self.train_props = train_props
+        self.lr = self.train_props["lr"]
+        self.epochs = self.train_props["epochs"]
+        self.acpr_meter = self.train_props["acpr_meter"]
 
         self.results = {}
         
@@ -91,6 +69,30 @@ class SimplePipeline():
         self._prepare_loaders()
     
     def _prepare_params(self):
+        if issubclass(self.base_model, (ClassicGMP, BatchGMP)):
+            self.model_params = params.make_gmp_params(Ka=self.train_props["gmp_degree"],
+                                                       La=self.train_props["gmp_degree"],
+                                                       Kb=self.train_props["gmp_degree"],
+                                                       Lb=self.train_props["gmp_degree"],
+                                                       Mb=self.train_props["gmp_degree"],
+                                                       Kc=self.train_props["gmp_degree"],
+                                                       Lc=self.train_props["gmp_degree"],
+                                                       Mc=self.train_props["gmp_degree"])
+        elif issubclass(self.base_model, (GRU, LSTM)):
+            self.model_params = {"hidden_size": self.train_props["hidden_size"], 
+                                 "num_layers": self.train_props["num_layers"]}
+        elif issubclass(self.base_model, DenseNetRegressor):
+            self.model_params = {"blocks": self.train_props["blocks"]}
+        elif issubclass(self.base_model, TCN):
+            self.model_params = {"num_channels": self.train_props["num_channels"], 
+                                 "kernel_size": self.train_props["kernel_size"],
+                                 "dropout": self.train_props["dropout"]}
+        elif issubclass(self.base_model, DiffESN):
+            self.model_params = {"n_reservoir": self.train_props["n_reservoir"], 
+                                 "sparsity": self.train_props["sparsity"]}
+        else:
+            raise ValueError(f"Unsupported base_model: {self.base_model}")
+        
         if issubclass(self.base_model, ClassicGMP):
             self.grad_clip_val = GMP_GRAD_CLIP_VAL
             self.u_k_lr = GMP_U_K_LR
@@ -126,11 +128,15 @@ class SimplePipeline():
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 
                                                                             arch="ila")
+        
+    def _build_optimizer(self, model):
+        return torch.optim.AdamW(model.parameters(), lr=self.lr)
+        
     def run_pa(self):
         print("Run PA")
         self.pa_model = self.base_model(**self.model_params, model_name="pa")
 
-        optimizer = torch.optim.Adam(self.pa_model.parameters(), lr=self.lr)
+        optimizer = self._build_optimizer(self.pa_model)
 
         time_train = 0
         if not self.pa_model.load_weights():
@@ -165,7 +171,7 @@ class SimplePipeline():
         is_load = dpd_model.load_weights()
         casc_dla = utils.CascadeModel(model_1=dpd_model, 
                                         model_2=self.pa_model)
-        optimizer = torch.optim.Adam(casc_dla.parameters(), lr=self.lr)
+        optimizer = self._build_optimizer(casc_dla)
 
         time_train = 0
         if not is_load:
@@ -200,7 +206,7 @@ class SimplePipeline():
         is_load = dpd_model.load_weights()
         casc_ila_train = utils.CascadeModel(model_1=self.pa_model, model_2=dpd_model, gain=self.gain, cascade_type="ila")
         casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
-        optimizer = torch.optim.Adam(casc_ila_train.parameters(), lr=self.lr)
+        optimizer = self._build_optimizer(casc_ila_train)
 
         time_train = 0
         if not is_load:
@@ -269,7 +275,7 @@ class SimplePipeline():
 
         dpd_model = self.base_model(**self.model_params, model_name="ilc")
         is_load = dpd_model.load_weights()
-        optimizer = torch.optim.Adam(dpd_model.parameters(), lr=self.lr)
+        optimizer = self._build_optimizer(dpd_model)
         
         time_train = 0
         if not is_load:
@@ -314,12 +320,13 @@ class SimplePipeline():
     
     def reset_u_k_signal(self):
         self.u_k_train = None
+        self.u_k_val = None
 
 
 class SnrPipeline:
     def __init__(self,
                  base_model: nn.Module,
-                 input_model_params,
+                 input_model_params: Dict,
                  data_dict: Dict,
                  snr_params: Dict):
         
@@ -426,6 +433,10 @@ class SnrPipeline:
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 
                                                                             arch="ila")
+
+    def _build_optimizer(self, model):
+        return torch.optim.AdamW(model.parameters(), lr=self.lr)
+    
     def _create_pa_noise_cascade(self, snr):
         noise_gen_model = utils.NoiseModel(snr=snr, fs=self.fs, bw=self.bw_main_ch)
         casc_pa_noise = utils.CascadeModel(model_1=self.pa_model, model_2=noise_gen_model)
@@ -438,7 +449,7 @@ class SnrPipeline:
             casc_pa_noise = self._create_pa_noise_cascade(snr)
             casc_dla = utils.CascadeModel(model_1=dpd_model, 
                                             model_2=casc_pa_noise)
-            optimizer = torch.optim.Adam(casc_dla.parameters(), lr=self.lr)
+            optimizer = self._build_optimizer(casc_dla)
 
             learning.train(net=casc_dla, 
                         criterion=self.criterion, 
@@ -467,7 +478,7 @@ class SnrPipeline:
             casc_pa_noise = self._create_pa_noise_cascade(snr)
             casc_ila_train = utils.CascadeModel(model_1=casc_pa_noise, model_2=dpd_model, gain=self.gain, cascade_type="ila")
             casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=casc_pa_noise)
-            optimizer = torch.optim.Adam(casc_ila_train.parameters(), lr=self.lr)
+            optimizer = self._build_optimizer(casc_ila_train)
 
             learning.train(net=casc_ila_train, 
                         criterion=self.criterion, 
@@ -521,7 +532,7 @@ class SnrPipeline:
             self.results["uk"]["acpr_right"].append(acpr_right_uk)
 
             dpd_model = self.base_model(**self.model_params)
-            optimizer = torch.optim.Adam(dpd_model.parameters(), lr=self.lr)
+            optimizer = self._build_optimizer(dpd_model)
             learning.train(net=dpd_model, 
                         criterion=self.criterion, 
                         optimizer=optimizer, 

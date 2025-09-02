@@ -16,6 +16,8 @@ class GRU(nn.Module):
         self.bidirectional = bidirectional
         self.batch_first = batch_first
         self.model_name = model_name
+        self.class_name = self.__class__.__name__
+        
         self.gru = nn.GRU(input_size=self.input_size, 
                           hidden_size=self.hidden_size, 
                           num_layers=self.num_layers, 
@@ -41,7 +43,7 @@ class GRU(nn.Module):
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
         filename = (
-            f"{directory}/{self.model_name}_gru_model_"
+            f"{directory}/{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
             f"in{self.input_size}_out{self.output_size}.pt"
         )
@@ -50,7 +52,7 @@ class GRU(nn.Module):
 
     def load_weights(self, directory="model_params"):
         filename = (
-            f"{directory}/{self.model_name}_gru_model_"
+            f"{directory}/{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
             f"in{self.input_size}_out{self.output_size}.pt")
         if os.path.isfile(filename):
@@ -77,6 +79,7 @@ class LSTM(nn.Module):
         self.batch_first = batch_first
         self.bias = bias
         self.model_name = model_name
+        self.class_name = self.__class__.__name__
 
         self.lstm = nn.LSTM(input_size=input_size,
                           hidden_size=hidden_size,
@@ -104,7 +107,7 @@ class LSTM(nn.Module):
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
         filename = (
-            f"{directory}/{self.model_name}_lstm_model_"
+            f"{directory}/{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
             f"in{self.input_size}_out{self.output_size}.pt"
         )
@@ -113,7 +116,7 @@ class LSTM(nn.Module):
 
     def load_weights(self, directory="model_params"):
         filename = (
-            f"{directory}/{self.model_name}_lstm_model_"
+            f"{directory}/{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
             f"in{self.input_size}_out{self.output_size}.pt")
         if os.path.isfile(filename):
@@ -139,13 +142,14 @@ class CustomTCN(TCN):
                          dropout=dropout,
                          input_shape=input_shape,
                          **kwargs)
-        self.model_name = model_name
         self.num_inputs = num_inputs
         self.num_channels = kwargs.get("num_channels")
         self.output_projection = output_projection
         self.kernel_size = kwargs.get("kernel_size")
         self.dropout = dropout
         self.input_shape = input_shape
+        self.model_name = model_name
+        self.class_name = self.__class__.__name__
 
 
     @utils.complex_handler
@@ -159,7 +163,7 @@ class CustomTCN(TCN):
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
         filename = (
-            f"{directory}/{self.model_name}_tcn_model_"
+            f"{directory}/{self.model_name}_{self.class_name}_"
             f"ch{self.num_channels}_ks{self.kernel_size}_"
             f"in{self.num_inputs}_out{self.output_projection}.pt"
         )
@@ -168,7 +172,7 @@ class CustomTCN(TCN):
 
     def load_weights(self, directory="model_params"):
         filename = (
-            f"{directory}/{self.model_name}_tcn_model_"
+            f"{directory}/{self.model_name}_{self.class_name}_"
             f"ch{self.num_channels}_ks{self.kernel_size}_"
             f"in{self.num_inputs}_out{self.output_projection}.pt"
         )
@@ -479,14 +483,18 @@ class DiffESN(nn.Module):
     
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
-        filename = f"{directory}/{self.model_name}_{self.class_name}_" \
-                   f"res{self.n_reservoir}_in{self.n_inputs}_out{self.n_outputs}.pt"
+        filename = (
+            f"{directory}/{self.model_name}_{self.class_name}_"
+            f"res{self.n_reservoir}_in{self.n_inputs}_out{self.n_outputs}.pt"
+        )
         torch.save(self.state_dict(), filename)
         print(f"Model weights saved to {filename}")
 
     def load_weights(self, directory="model_params"):
-        filename = f"{directory}/{self.model_name}_{self.class_name}_" \
-                   f"res{self.n_reservoir}_in{self.n_inputs}_out{self.n_outputs}.pt"
+        filename = (
+            f"{directory}/{self.model_name}_{self.class_name}_"
+            f"res{self.n_reservoir}_in{self.n_inputs}_out{self.n_outputs}.pt"
+        )
         if os.path.isfile(filename):
             state_dict = torch.load(filename)
             self.load_state_dict(state_dict)
@@ -565,6 +573,12 @@ class DenseNetRegressor(nn.Module):
 
         return x_.view(B, T, -1)
 
+    def count_params(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+    
+    def named_params(self):
+        return [(name, param.shape) for name, param in self.named_parameters()]
+    
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
         filename = f"{directory}/{self.model_name}_{self.class_name}_" \
