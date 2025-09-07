@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 import numpy as np
 from scipy.signal import welch, get_window, lfilter
 from modules.utils import to_torch_tensor, iq_to_complex
@@ -20,8 +21,7 @@ def compute_mse(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     if x.shape[-1] != 2:
         raise ValueError("Ожидается последний размер = 2 (I, Q)")
 
-    mse = nn.MSELoss()
-    return mse(x, y)
+    return F.mse_loss(x, y)
 
 
 def compute_nmse(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -29,20 +29,18 @@ def compute_nmse(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         x = torch.view_as_real(x)
     if torch.is_complex(y):
         y = torch.view_as_real(y)
-
+        
     if x.shape != y.shape:
         raise ValueError(f"Формы входов не совпадают: x {x.shape}, y {y.shape}")
     if x.shape[-1] != 2:
         raise ValueError("Ожидается последний размер = 2 (I, Q)")
-
-    mse = compute_mse(x, y)
-
-    energy = (y ** 2).sum(dim=-1).mean()
-
+    
+    mse = F.mse_loss(x, y)
+    energy = (y ** 2).mean()
     if energy == 0:
         raise ZeroDivisionError("Energy of the ground truth is zero.")
-
-    return 10 * torch.log10(mse / energy)
+    nmse = mse / energy
+    return 10 * torch.log10(nmse)
 
 
 def calculate_am_am(input_data: torch.Tensor, output_data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:

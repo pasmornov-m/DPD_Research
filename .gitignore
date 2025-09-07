@@ -1,2 +1,4 @@
 **/__pycache__/
 /MY_DATASET
+/.vscode
+/.pytest_cache

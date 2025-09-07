@@ -46,7 +46,7 @@ class SimplePipeline():
 
         self.results = {}
         
-        self.criterion = metrics.compute_mse
+        self.criterion = metrics.compute_nmse
         self.metric_criterion = metrics.compute_nmse
         
         self.frame_length = None
@@ -130,7 +130,7 @@ class SimplePipeline():
                                                                             arch="ila")
         
     def _build_optimizer(self, model):
-        return torch.optim.AdamW(model.parameters(), lr=self.lr)
+        return torch.optim.AdamW(model.parameters(), lr=self.lr, amsgrad=True)
         
     def run_pa(self):
         print("Run PA")

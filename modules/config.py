@@ -1,6 +1,6 @@
 # pipelines settings
 
-GMP_GRAD_CLIP_VAL = 0.0
+GMP_GRAD_CLIP_VAL = 1.0
 GMP_U_K_LR = 0.001
 GMP_U_K_EPOCHS = 500
 
