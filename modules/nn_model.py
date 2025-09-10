@@ -4,10 +4,18 @@ import numpy as np
 import os
 from modules import utils
 from pytorch_tcn import TCN
+from modules.torch_ard import LinearARD
 
 
 class GRU(nn.Module):
-    def __init__(self, input_size=2, hidden_size=64, num_layers=1, output_size=2, bidirectional=False, batch_first=True, model_name=""):
+    def __init__(self, 
+                 input_size=2, 
+                 hidden_size=64, 
+                 num_layers=1, 
+                 output_size=2, 
+                 bidirectional=False, 
+                 batch_first=True, 
+                 model_name=""):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -23,7 +31,8 @@ class GRU(nn.Module):
                           num_layers=self.num_layers, 
                           batch_first=self.batch_first, 
                           bidirectional=self.bidirectional)
-        self.fc = nn.Linear(hidden_size, output_size)
+        
+        self.fc = nn.Linear(self.hidden_size, self.output_size)
 
     @utils.complex_handler
     def forward(self, x, h_0=None):
@@ -36,6 +45,25 @@ class GRU(nn.Module):
         out, _ = self.gru(x, h_0)
         y = self.fc(out)
         return y
+    
+    def switch_to_ard(self, thresh=3, ard_init=-10):
+        """Заменить nn.Linear на LinearARD, скопировав веса"""
+        if isinstance(self.fc, nn.Linear):
+            old_fc = self.fc
+            new_fc = LinearARD(
+                in_features=old_fc.in_features,
+                out_features=old_fc.out_features,
+                bias=(old_fc.bias is not None),
+                thresh=thresh,
+                ard_init=ard_init
+            )
+
+            new_fc.weight.data.copy_(old_fc.weight.data)
+            if old_fc.bias is not None:
+                new_fc.bias.data.copy_(old_fc.bias.data)
+            self.fc = new_fc
+        else:
+            print("fc уже является LinearARD")
     
     def count_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -87,9 +115,12 @@ class LSTM(nn.Module):
                           bidirectional=self.bidirectional,
                           batch_first=self.batch_first,
                           bias=self.bias)
-        self.fc_out = nn.Linear(in_features=self.hidden_size,
-                                out_features=self.output_size,
-                                bias=self.bias)
+        # self.fc_out = nn.Linear(in_features=self.hidden_size,
+        #                         out_features=self.output_size,
+        #                         bias=self.bias)
+        
+        self.fc_out = LinearARD(in_features=self.hidden_size,
+                                out_features=self.output_size)
 
 
     @utils.complex_handler
@@ -422,7 +453,6 @@ class DiffESN(nn.Module):
         #     hidden_layers=[16]
         #     )
 
-    
     def _make_readout(self, input_dim: int, output_dim: int, hidden_layers: list[int]):
         layers = []
         dims = [input_dim] + hidden_layers + [output_dim]
@@ -431,7 +461,6 @@ class DiffESN(nn.Module):
             layers.append(nn.Tanh())
         layers.append(nn.Linear(dims[-2], dims[-1]))
         return nn.Sequential(*layers)
-
 
     def _make_vector(self, v, length):
         t = torch.tensor(v, dtype=torch.float32)
@@ -449,7 +478,6 @@ class DiffESN(nn.Module):
     
     def named_params(self):
         return [(name, param.shape) for name, param in self.named_parameters()]
-
 
     @utils.complex_handler
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -480,7 +508,6 @@ class DiffESN(nn.Module):
 
         return result_outputs
 
-    
     def save_weights(self, directory="model_params"):
         os.makedirs(directory, exist_ok=True)
         filename = (
