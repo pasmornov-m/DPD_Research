@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.autograd import Variable
 import numpy as np
 import os
 from modules import utils
@@ -134,6 +135,567 @@ class LSTM(nn.Module):
         else:
             print(f"No saved weights found at {filename}, initializing new parameters.")
             return False
+
+
+
+
+class LSTMCell(nn.Module):
+    def __init__(self, input_size, hidden_size, bias=True):
+        super(LSTMCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.bias = bias
+
+        self.xh = nn.Linear(input_size, hidden_size * 4, bias=bias)
+        self.hh = nn.Linear(hidden_size, hidden_size * 4, bias=bias)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        std = 1.0 / np.sqrt(self.hidden_size)
+        for w in self.parameters():
+            w.data.uniform_(-std, std)
+
+    def forward(self, input, hx=None):
+
+        # Inputs:
+        #       input: of shape (batch_size, input_size)
+        #       hx: of shape (batch_size, hidden_size)
+        # Outputs:
+        #       hy: of shape (batch_size, hidden_size)
+        #       cy: of shape (batch_size, hidden_size)
+
+        if hx is None:
+            hx = Variable(input.new_zeros(input.size(0), self.hidden_size))
+            hx = (hx, hx)
+
+        hx, cx = hx
+
+        gates = self.xh(input) + self.hh(hx)
+
+        # Get gates (i_t, f_t, g_t, o_t)
+        input_gate, forget_gate, cell_gate, output_gate = gates.chunk(4, 1)
+
+        i_t = torch.sigmoid(input_gate)
+        f_t = torch.sigmoid(forget_gate)
+        g_t = torch.tanh(cell_gate)
+        o_t = torch.sigmoid(output_gate)
+
+        cy = cx * f_t + i_t * g_t
+
+        hy = o_t * torch.tanh(cy)
+
+
+        return (hy, cy)
+
+
+class CustomLSTM(nn.Module):
+    def __init__(self, input_size=2, hidden_size=64, num_layers=1, output_size=2,
+                 bias=False, batch_first=True):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.input_size = input_size
+        self.output_size = output_size
+        self.num_layers = num_layers
+        self.bias = bias
+        self.batch_first = batch_first
+
+        # Строим стек LSTMCell
+        self.rnn_cell_list = nn.ModuleList()
+        self.rnn_cell_list.append(LSTMCell(input_size, hidden_size, bias))
+        for l in range(1, num_layers):
+            self.rnn_cell_list.append(LSTMCell(hidden_size, hidden_size, bias))
+
+        # Выходной слой
+        self.fc_out = nn.Linear(hidden_size, output_size, bias=bias)
+
+    @utils.complex_handler
+    def forward(self, x, hx=None):
+        """
+        x:  (batch, seq_len, input_size)
+        hx: (h0, c0), где h0 и c0 имеют форму (num_layers, batch, hidden_size)
+        """
+        batch_size, seq_len, _ = x.size()
+        device = x.device
+
+        if hx is None:
+            h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+            c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+        else:
+            h0, c0 = hx
+
+        hidden = [(h0[layer], c0[layer]) for layer in range(self.num_layers)]
+
+        outputs = []
+        for t in range(seq_len):
+            x_t = x[:, t, :]
+            for layer in range(self.num_layers):
+                h, c = hidden[layer]
+                if layer == 0:
+                    hidden[layer] = self.rnn_cell_list[layer](x_t, (h, c))
+                else:
+                    hidden[layer] = self.rnn_cell_list[layer](hidden[layer - 1][0], (h, c))
+            outputs.append(hidden[-1][0].unsqueeze(1))
+
+        outputs = torch.cat(outputs, dim=1)  # (batch, seq_len, hidden_size)
+
+        y = self.fc_out(outputs)  # (batch, seq_len, output_size)
+
+        return y
+
+
+
+# --- вспомогательная alpha-regularizer (приближение / placeholder)
+def alpha_regf(log_alpha):
+    # Приближение для KL в варианте "logalpha" (Molchanov et al. 2017 использует аппрокс.)
+    # Это placeholder; при желании замените на точную функцию из вашей реализации.
+    # Здесь даём гладкую положительную функцию, растущую с log_alpha.
+    return 0.5 * torch.log1p(torch.exp(log_alpha))  # простая гладкая аппроксимация
+
+# def alpha_regf(alpha: torch.Tensor) -> torch.Tensor:
+#     """
+#     Аппроксимация KL регуляризатора для вариационного dropout (Molchanov et al., 2017).
+    
+#     alpha: torch.Tensor, отношение σ^2 / θ^2 (log alpha или просто alpha)
+#     возвращает: torch.Tensor с теми же размерами, представляющий регуляризацию
+#     """
+#     # Чтобы избежать log(0)
+#     eps = 1e-8
+#     alpha = torch.clamp(alpha, min=eps)
+    
+#     term1 = 0.64 * torch.sigmoid(1.87 + 1.49 * torch.log(alpha))
+#     term2 = 0.5 * torch.log1p(1.0 / alpha)
+    
+#     return term1 - term2
+
+# --- Предполагаем, что есть CustomLSTM (или LSTM) из предыдущих сообщений.
+# --- BayesianLSTM наследует CustomLSTM и переопределяет части поведения.
+class BayesianLSTM(CustomLSTM):   # CustomLSTM — предыдущая реализация LSTM
+    def __init__(self, input_size, hidden_size, num_layers, output_size,
+                 bias=True, config="LLL",
+                 log_sigma_in_init=-3.0, log_sigma_hid_init=-3.0,
+                 thresh=3.0,
+                 **kwargs):
+        """
+        config: строка длины >=3, описана в комментариях в исходном коде Theano.
+        config[0] — поведение весов W (L,N,D,...)
+        config[1] — поведение preactivation multiplicative weights (gates)
+        config[2] — поведение Z (input/hidden multiplicative weights)
+        """
+        super().__init__(input_size=input_size, hidden_size=hidden_size,
+                         num_layers=num_layers, output_size=output_size, **kwargs)
+
+        self.config = config
+        self.log_sigma_in_init = log_sigma_in_init
+        self.log_sigma_hid_init = log_sigma_hid_init
+        self.thresh = thresh
+        
+        # Веса input → gates
+        self.W_in_to_ingate = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        self.W_in_to_forgetgate = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        self.W_in_to_cell = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        self.W_in_to_outgate = nn.Parameter(torch.Tensor(input_size, hidden_size))
+
+        # Веса hidden → gates
+        self.W_hid_to_ingate = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        self.W_hid_to_forgetgate = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        self.W_hid_to_cell = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        self.W_hid_to_outgate = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+
+        # Смещения
+        self.b_ingate = nn.Parameter(torch.Tensor(hidden_size))
+        self.b_forgetgate = nn.Parameter(torch.Tensor(hidden_size))
+        self.b_cell = nn.Parameter(torch.Tensor(hidden_size))
+        self.b_outgate = nn.Parameter(torch.Tensor(hidden_size))
+
+        self.reset_parameters()
+        
+        self.fc_out = nn.Linear(in_features=hidden_size,
+                                out_features=output_size,
+                                bias=bias)
+
+        # --- Параметры лог-сигм для весов (W_in, W_hid) если выбран L или N
+        if self.config[0] in {"L", "N"}:
+            self.logsig_w_in = nn.Parameter(torch.full(
+                (4, self.input_size, self.hidden_size), log_sigma_in_init, dtype=torch.float32))
+            self.logsig_w_hid = nn.Parameter(torch.full(
+                (4, self.hidden_size, self.hidden_size), log_sigma_hid_init, dtype=torch.float32))
+        else:
+            # буферы нулей — чтобы код не ломался
+            self.register_buffer('logsig_w_in', torch.zeros(4, self.input_size, self.hidden_size))
+            self.register_buffer('logsig_w_hid', torch.zeros(4, self.hidden_size, self.hidden_size))
+
+        # --- Z (input/hidden neuron multiplicative params)
+        if self.config[2] in {"L", "N", "D", "I"}:
+            self.mu_in = nn.Parameter(torch.ones(self.input_size))
+        else:
+            self.register_buffer('mu_in', torch.ones(self.input_size))
+
+        if self.config[2] in {"L", "N", "I"}:
+            self.logsig_in = nn.Parameter(torch.full((self.input_size,), log_sigma_in_init))
+        else:
+            self.register_buffer('logsig_in', torch.zeros(self.input_size))
+
+        if self.config[2] in {"L", "N", "D", "R"}:
+            self.mu_hid = nn.Parameter(torch.ones(self.hidden_size))
+        else:
+            self.register_buffer('mu_hid', torch.ones(self.hidden_size))
+
+        if self.config[2] in {"L", "N", "R"}:
+            self.logsig_hid = nn.Parameter(torch.full((self.hidden_size,), log_sigma_hid_init))
+        else:
+            self.register_buffer('logsig_hid', torch.zeros(self.hidden_size))
+
+        # --- gates multiplicative parameters
+        if self.config[1] in {"L", "N", "D"}:
+            self.mu_gates = nn.Parameter(torch.ones(4, self.hidden_size))
+        else:
+            self.register_buffer('mu_gates', torch.ones(4, self.hidden_size))
+
+        if self.config[1] in {"L", "N"}:
+            self.logsig_gates = nn.Parameter(torch.full((4, self.hidden_size), log_sigma_hid_init))
+        else:
+            self.register_buffer('logsig_gates', torch.zeros(4, self.hidden_size))
+
+        # internal noise placeholders (будут заполнены в generate_noise_and_clip)
+        self.input_w_noise = None
+        self.hidden_w_noise = None
+        self.input_noise = None
+        self.hidden_noise = None
+        self.gates_noise = None
+
+        # clip masks
+        self.input_w_clip = None
+        self.hidden_w_clip = None
+        self.input_clip = None
+        self.hidden_clip = None
+        self.gates_clip = None
+
+    def clip_func(self, mtx, to=8.0):
+        return torch.clamp(mtx, min=-to, max=to)
+    
+    def reset_parameters(self):
+        std = 1.0 / (self.hidden_size ** 0.5)
+        for w in self.parameters():
+            nn.init.uniform_(w, -std, std)
+
+    def generate_noise_and_clip(self, batch_size, device=None, deterministic=False, clip=False):
+        """
+        Заполняет self.input_w_noise, self.hidden_w_noise, input_noise, hidden_noise, gates_noise.
+        Если deterministic=True — шум заменяется на нулевые шумы, а mu используются как значения.
+        clip=True — вычисляются маски клиппинга на основе logalpha.
+        """
+        if device is None:
+            device = next(self.parameters()).device
+
+        # --- веса шумы
+        if not deterministic and self.config[0] in {"L", "N"}:
+            self.input_w_noise = torch.randn(4, self.input_size, self.hidden_size, device=device) * torch.exp(self.logsig_w_in)
+            self.hidden_w_noise = torch.randn(4, self.hidden_size, self.hidden_size, device=device) * torch.exp(self.logsig_w_hid)
+        else:
+            self.input_w_noise = torch.zeros(4, self.input_size, self.hidden_size, device=device)
+            self.hidden_w_noise = torch.zeros(4, self.hidden_size, self.hidden_size, device=device)
+
+        # --- z (input/hidden) noise per example
+        if not deterministic and self.config[2] in {"L", "N"}:
+            self.input_noise = torch.randn(batch_size, self.input_size, device=device) * torch.exp(self.logsig_in) + self.mu_in
+            self.hidden_noise = torch.randn(batch_size, self.hidden_size, device=device) * torch.exp(self.logsig_hid) + self.mu_hid
+        elif not deterministic and self.config[2] == "I":
+            self.input_noise = torch.randn(batch_size, self.input_size, device=device) * torch.exp(self.logsig_in) + self.mu_in
+            self.hidden_noise = torch.ones(1, device=device)
+        elif not deterministic and self.config[2] == "R":
+            self.input_noise = torch.ones(1, device=device)
+            self.hidden_noise = torch.randn(batch_size, self.hidden_size, device=device) * torch.exp(self.logsig_hid) + self.mu_hid
+        elif not deterministic and self.config[2] == "D":
+            self.input_noise = self.mu_in
+            self.hidden_noise = self.mu_hid
+        else:
+            # deterministic or config not related
+            if self.config[2] in {"L", "N", "D"}:
+                self.input_noise = self.mu_in.unsqueeze(0).expand(batch_size, -1).to(device)
+                self.hidden_noise = self.mu_hid.unsqueeze(0).expand(batch_size, -1).to(device)
+            elif self.config[2] == "I":
+                self.input_noise = self.mu_in.unsqueeze(0).expand(batch_size, -1).to(device)
+                self.hidden_noise = torch.ones(1, device=device)
+            elif self.config[2] == "R":
+                self.input_noise = torch.ones(1, device=device)
+                self.hidden_noise = self.mu_hid.unsqueeze(0).expand(batch_size, -1).to(device)
+            else:
+                self.input_noise = torch.ones(1, device=device)
+                self.hidden_noise = torch.ones(1, device=device)
+
+        # --- gates noise
+        if not deterministic and self.config[1] in {"L", "N"}:
+            # shape (4, batch, hidden)
+            self.gates_noise = (torch.randn(4, batch_size, self.hidden_size, device=device) *
+                                torch.exp(self.logsig_gates).unsqueeze(1) + self.mu_gates.unsqueeze(1))
+        elif self.config[1] == "D":
+            self.gates_noise = self.mu_gates.unsqueeze(1)  # shape (4,1,hidden) - will broadcast
+        else:
+            self.gates_noise = torch.ones(4, 1, self.hidden_size, device=device)
+
+        # --- clip masks
+        if clip:
+            # W tensors: stack 4 matrices for in and hid
+            W_in = torch.stack([self.W_in_to_ingate, self.W_in_to_forgetgate,
+                                self.W_in_to_cell, self.W_in_to_outgate], dim=0)  # (4, in, hid)
+            if self.config[0] == "L":
+                log_alpha_w_in = self.clip_func(2.0 * self.logsig_w_in - torch.log(W_in ** 2 + 1e-12))
+                self.input_w_clip = (log_alpha_w_in <= self.thresh).float()
+            else:
+                self.input_w_clip = torch.ones_like(W_in)
+
+            W_hid = torch.stack([self.W_hid_to_ingate, self.W_hid_to_forgetgate,
+                                 self.W_hid_to_cell, self.W_hid_to_outgate], dim=0)  # (4,hid,hid)
+            if self.config[0] == "L":
+                log_alpha_w_hid = self.clip_func(2.0 * self.logsig_w_hid - torch.log(W_hid ** 2 + 1e-12))
+                self.hidden_w_clip = (log_alpha_w_hid <= self.thresh).float()
+            else:
+                self.hidden_w_clip = torch.ones_like(W_hid)
+
+            # input/hidden z clip
+            if self.config[2] == "L":
+                log_alpha_in = self.clip_func(2.0 * self.logsig_in - torch.log(self.mu_in ** 2 + 1e-12))
+                self.input_clip = (log_alpha_in <= self.thresh).float()
+                log_alpha_hid = self.clip_func(2.0 * self.logsig_hid - torch.log(self.mu_hid ** 2 + 1e-12))
+                self.hidden_clip = (log_alpha_hid <= self.thresh).float()
+            elif self.config[2] == "I":
+                log_alpha_in = self.clip_func(2.0 * self.logsig_in - torch.log(self.mu_in ** 2 + 1e-12))
+                self.input_clip = (log_alpha_in <= self.thresh).float()
+                self.hidden_clip = torch.ones(1, device=device)
+            elif self.config[2] == "R":
+                self.input_clip = torch.ones(1, device=device)
+                log_alpha_hid = self.clip_func(2.0 * self.logsig_hid - torch.log(self.mu_hid ** 2 + 1e-12))
+                self.hidden_clip = (log_alpha_hid <= self.thresh).float()
+            else:
+                self.input_clip = torch.ones(1, device=device)
+                self.hidden_clip = torch.ones(1, device=device)
+
+            # gates
+            if self.config[1] == "L":
+                log_alpha_gates = self.clip_func(2.0 * self.logsig_gates - torch.log(self.mu_gates ** 2 + 1e-12))
+                self.gates_clip = (log_alpha_gates <= self.thresh).float()
+            else:
+                self.gates_clip = torch.ones_like(self.mu_gates)
+        else:
+            # no clipping: ones
+            self.input_w_clip = torch.ones(4, self.input_size, self.hidden_size, device=device)
+            self.hidden_w_clip = torch.ones(4, self.hidden_size, self.hidden_size, device=device)
+            self.input_clip = torch.ones(1, device=device)
+            self.hidden_clip = torch.ones(1, device=device)
+            self.gates_clip = torch.ones(4, self.hidden_size, device=device)
+
+    def input_preactivation(self, x_b, gate_type, deterministic=False, clip=False):
+        # x_b: (batch, input_size)
+        gate_idx = {'input': 0, 'forget': 1, 'cell': 2, 'output': 3}[gate_type]
+        # Use per-example input_noise if available
+        input_noise = self.input_noise if (isinstance(self.input_noise, torch.Tensor) and self.input_noise.dim() == 2) else self.input_noise
+        # apply input multiplicative z and clip
+        x_mod = x_b * input_noise
+        # weight with potential weight-noise and clip
+        W = [self.W_in_to_ingate, self.W_in_to_forgetgate, self.W_in_to_cell, self.W_in_to_outgate][gate_idx]  # (in, hid)
+        W_noise = self.input_w_noise[gate_idx] if self.input_w_noise is not None else 0.0
+        W_clip = self.input_w_clip[gate_idx] if self.input_w_clip is not None else 1.0
+        W_eff = (W + W_noise) * W_clip
+        return x_mod @ W_eff  # (batch, hidden)
+
+    def hidden_preactivation(self, h_b, gate_type, deterministic=False, clip=False):
+        gate_idx = {'input': 0, 'forget': 1, 'cell': 2, 'output': 3}[gate_type]
+        W = [self.W_hid_to_ingate, self.W_hid_to_forgetgate, self.W_hid_to_cell, self.W_hid_to_outgate][gate_idx]  # (hid, hid)
+        W_noise = self.hidden_w_noise[gate_idx] if self.hidden_w_noise is not None else 0.0
+        W_clip = self.hidden_w_clip[gate_idx] if self.hidden_w_clip is not None else 1.0
+        W_eff = (W + W_noise) * W_clip
+        return h_b @ W_eff
+
+    @utils.complex_handler
+    def forward(self, x, hx=None, deterministic=False, clip=False, mask=None):
+        """
+        x: (batch, seq_len, input_size)
+        returns: outputs (batch, seq_len, hidden)  -- like standard nn.LSTM output (before final fc)
+        hx: optional initial tuple (h0, c0) with shape (num_layers, batch, hidden)
+        deterministic (bool): if True -> use mu params (no noise)
+        clip (bool): whether to compute clip masks
+        mask: optional (batch, seq_len) boolean Tensor to support masking (like theano's mask)
+        """
+        batch_size, seq_len, _ = x.size()
+        device = x.device
+        # prepare noises & clips
+        self.generate_noise_and_clip(batch_size, device=device, deterministic=deterministic, clip=clip)
+
+        # initialize h0,c0
+        if hx is None:
+            h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+            c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+        else:
+            h0, c0 = hx
+
+        hidden = [(h0[layer], c0[layer]) for layer in range(self.num_layers)]
+
+        outputs = []
+        for t in range(seq_len):
+            x_t = x[:, t, :]  # (batch, input)
+            for layer in range(self.num_layers):
+                h_prev, c_prev = hidden[layer]
+                if layer == 0:
+                    in_act = self.input_preactivation(x_t, 'input', deterministic, clip)
+                    f_act = self.input_preactivation(x_t, 'forget', deterministic, clip)
+                    c_act = self.input_preactivation(x_t, 'cell', deterministic, clip)
+                    o_act = self.input_preactivation(x_t, 'output', deterministic, clip)
+                else:
+                    # previous top-layer hidden used as "input"
+                    prev_h = hidden[layer - 1][0]
+                    in_act = self.input_preactivation(prev_h, 'input', deterministic, clip)  # note: in original code Z applies to input & hidden; we reuse same function
+                    f_act = self.input_preactivation(prev_h, 'forget', deterministic, clip)
+                    c_act = self.input_preactivation(prev_h, 'cell', deterministic, clip)
+                    o_act = self.input_preactivation(prev_h, 'output', deterministic, clip)
+
+                # add hidden contributions
+                in_pre = in_act + self.hidden_preactivation(h_prev, 'input', deterministic, clip)
+                f_pre = f_act + self.hidden_preactivation(h_prev, 'forget', deterministic, clip)
+                c_pre = c_act + self.hidden_preactivation(h_prev, 'cell', deterministic, clip)
+                o_pre = o_act + self.hidden_preactivation(h_prev, 'output', deterministic, clip)
+
+                # apply gate multiplicative noise and bias
+                # gates_noise shape (4, batch, hidden) or (4,1,hidden) for broadcast
+                g0 = self.gates_noise[0] if self.gates_noise is not None else 1.0
+                g1 = self.gates_noise[1] if self.gates_noise is not None else 1.0
+                g2 = self.gates_noise[2] if self.gates_noise is not None else 1.0
+                g3 = self.gates_noise[3] if self.gates_noise is not None else 1.0
+
+                # add biases (we rely on biases existing as self.b_ingate etc.)
+                i_t = torch.sigmoid(in_pre * g0 + self.b_ingate)
+                f_t = torch.sigmoid(f_pre * g1 + self.b_forgetgate)
+                g_t = torch.tanh(c_pre * g2 + self.b_cell)
+                o_t = torch.sigmoid(o_pre * g3 + self.b_outgate)
+
+                c_new = f_t * c_prev + i_t * g_t
+
+                # hidden multiplicative z
+                hidden_noise_per_example = self.hidden_noise if (isinstance(self.hidden_noise, torch.Tensor) and self.hidden_noise.dim() == 2) else self.hidden_noise
+                h_new = o_t * torch.tanh(c_new) * hidden_noise_per_example
+
+                # masking if present
+                if mask is not None:
+                    m_t = mask[:, t].unsqueeze(-1).to(device)  # (batch,1)
+                    c_new = m_t * c_new + (1 - m_t) * c_prev
+                    h_new = m_t * h_new + (1 - m_t) * h_prev
+
+                hidden[layer] = (h_new, c_new)
+
+            outputs.append(hidden[-1][0].unsqueeze(1))
+
+        outputs = torch.cat(outputs, dim=1)  # (batch, seq_len, hidden)
+        last_out = self.fc_out(outputs)      # (batch, output_size)
+        # return same output shape as builtin nn.LSTM (but before fc)
+        return last_out
+
+    def eval_reg(self, train_size):
+        """
+        Compute KL regularization term per training set (scalar tensor).
+        Mirrors Theano eval_reg: supports 'N' (normal) and 'L' (log-alpha) cases.
+        """
+        KL = torch.tensor(0.0, device=next(self.parameters()).device)
+
+        # W_in
+        W_in = torch.stack([self.W_in_to_ingate, self.W_in_to_forgetgate,
+                            self.W_in_to_cell, self.W_in_to_outgate], dim=0)  # (4,in,hidden)
+        if self.config[0] == "N":
+            KL_element_in = - self.logsig_w_in + 0.5 * (torch.exp(2.0 * self.logsig_w_in) + W_in ** 2) - 0.5
+            KL = KL + KL_element_in.sum()
+        elif self.config[0] == "L":
+            log_alpha_w_in = self.clip_func(2.0 * self.logsig_w_in - torch.log(W_in ** 2 + 1e-12))
+            KL = KL + alpha_regf(log_alpha_w_in).sum()
+
+        # W_hid
+        W_hid = torch.stack([self.W_hid_to_ingate, self.W_hid_to_forgetgate,
+                             self.W_hid_to_cell, self.W_hid_to_outgate], dim=0)
+        if self.config[0] == "N":
+            KL_element_hid = - self.logsig_w_hid + 0.5 * (torch.exp(2.0 * self.logsig_w_hid) + W_hid ** 2) - 0.5
+            KL = KL + KL_element_hid.sum()
+        elif self.config[0] == "L":
+            log_alpha_w_hid = self.clip_func(2.0 * self.logsig_w_hid - torch.log(W_hid ** 2 + 1e-12))
+            KL = KL + alpha_regf(log_alpha_w_hid).sum()
+
+        # neurons (z)
+        if self.config[2] == "L":
+            log_alpha_hid = self.clip_func(2.0 * self.logsig_hid - torch.log(self.mu_hid ** 2 + 1e-12))
+            KL = KL + alpha_regf(log_alpha_hid).sum()
+            log_alpha_in = self.clip_func(2.0 * self.logsig_in - torch.log(self.mu_in ** 2 + 1e-12))
+            KL = KL + alpha_regf(log_alpha_in).sum()
+        elif self.config[2] == "I":
+            log_alpha_in = self.clip_func(2.0 * self.logsig_in - torch.log(self.mu_in ** 2 + 1e-12))
+            KL = KL + alpha_regf(log_alpha_in).sum()
+        elif self.config[2] == "R":
+            log_alpha_hid = self.clip_func(2.0 * self.logsig_hid - torch.log(self.mu_hid ** 2 + 1e-12))
+            KL = KL + alpha_regf(log_alpha_hid).sum()
+        elif self.config[2] == "N":
+            KL_element = - self.logsig_hid + 0.5 * (torch.exp(2.0 * self.logsig_hid) + self.mu_hid ** 2) - 0.5
+            KL = KL + KL_element.sum()
+            KL_element = - self.logsig_in + 0.5 * (torch.exp(2.0 * self.logsig_in) + self.mu_in ** 2) - 0.5
+            KL = KL + KL_element.sum()
+
+        # gates
+        if self.config[1] == "L":
+            log_alpha_gates = self.clip_func(2.0 * self.logsig_gates - torch.log(self.mu_gates ** 2 + 1e-12))
+            KL = KL + alpha_regf(log_alpha_gates).sum()
+        elif self.config[1] == "N":
+            KL_element = - self.logsig_gates + 0.5 * (torch.exp(2.0 * self.logsig_gates) + self.mu_gates ** 2) - 0.5
+            KL = KL + KL_element.sum()
+
+        return KL / float(train_size)
+
+    def get_ard(self):
+        """
+        Вычисляет маски ARD (аналог get_ard в Theano).
+        Возвращает dict с булевыми масками (в numpy).
+        """
+        # W masks
+        if self.config[0] == "L":
+            W_in = torch.stack([self.W_in_to_ingate, self.W_in_to_forgetgate,
+                                self.W_in_to_cell, self.W_in_to_outgate], dim=0).detach()
+            log_alpha_w_in = (2.0 * self.logsig_w_in.detach() - 2.0 * torch.log(torch.abs(W_in) + 1e-12))
+            mask_w_in = (log_alpha_w_in < self.thresh).cpu().numpy()
+            W_hid = torch.stack([self.W_hid_to_ingate, self.W_hid_to_forgetgate,
+                                 self.W_hid_to_cell, self.W_hid_to_outgate], dim=0).detach()
+            log_alpha_w_hid = (2.0 * self.logsig_w_hid.detach() - 2.0 * torch.log(torch.abs(W_hid) + 1e-12))
+            mask_w_hid = (log_alpha_w_hid < self.thresh).cpu().numpy()
+        else:
+            mask_w_in = torch.ones((4, self.input_size, self.hidden_size), dtype=torch.bool).cpu().numpy()
+            mask_w_hid = torch.ones((4, self.hidden_size, self.hidden_size), dtype=torch.bool).cpu().numpy()
+
+        # neurons
+        mask_in = mask_w_in.any(axis=2).any(axis=0)  # reduce
+        mask_hid_by_w = mask_w_hid.any(axis=2).any(axis=0)
+        mask_hid_by_z = mask_hid_by_w.copy()
+
+        if self.config[2] == "L":
+            log_alpha_hid = (2.0 * self.logsig_hid.detach().cpu().numpy() - 2.0 * np.log(np.abs(self.mu_hid.detach().cpu().numpy()) + 1e-12))
+            log_alpha_in = (2.0 * self.logsig_in.detach().cpu().numpy() - 2.0 * np.log(np.abs(self.mu_in.detach().cpu().numpy()) + 1e-12))
+            mask_in = np.logical_and(log_alpha_in < self.thresh, mask_in)
+            mask_hid_by_z = log_alpha_hid < self.thresh
+        elif self.config[2] == "I":
+            log_alpha_in = (2.0 * self.logsig_in.detach().cpu().numpy() - 2.0 * np.log(np.abs(self.mu_in.detach().cpu().numpy()) + 1e-12))
+            mask_in = np.logical_and(log_alpha_in < self.thresh, mask_in)
+        elif self.config[2] == "R":
+            log_alpha_hid = (2.0 * self.logsig_hid.detach().cpu().numpy() - 2.0 * np.log(np.abs(self.mu_hid.detach().cpu().numpy()) + 1e-12))
+            mask_hid_by_z = log_alpha_hid < self.thresh
+
+        # gates
+        if self.config[1] == "L":
+            log_alpha_gates = (2.0 * self.logsig_gates.detach().cpu().numpy() - 2.0 * np.log(np.abs(self.mu_gates.detach().cpu().numpy()) + 1e-12))
+            mask = np.concatenate([mask_w_in, mask_w_hid], axis=1)
+            mask_gates = np.logical_and(log_alpha_gates < self.thresh, mask.any(axis=1))
+        else:
+            mask = np.concatenate([mask_w_in, mask_w_hid], axis=1)
+            mask_gates = mask.any(axis=1)
+
+        return {
+            "w_input": mask_w_in,
+            "w_hidden": mask_w_hid,
+            "gates": mask_gates,
+            "z_input": mask_in,
+            "z_hidden_by_w": mask_hid_by_w,
+            "z_hidden": mask_hid_by_z
+        }
 
 
 

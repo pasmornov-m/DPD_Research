@@ -77,6 +77,7 @@ def train(net,
                         criterion=criterion,
                         dataloader=train_loader,
                         grad_clip_val=grad_clip_val)
+        # print(net.print_sparse_attributes())
 
         val_loss, val_metric_loss = net_eval(net=net,
                                              criterion=criterion,
