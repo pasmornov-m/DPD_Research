@@ -1,20 +1,20 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
-import polars as pl
+import pandas as pd
 import json
 from typing import Dict, Any
 from modules import utils, metrics
 
 
 def load_csv_to_tensor(file_path: str) -> torch.Tensor:
-    data = pl.read_csv(file_path)
+    data = pd.read_csv(file_path)
     required_columns = {'I', 'Q'}
     if not required_columns.issubset(data.columns):
         raise ValueError(f"CSV file must contain columns: {required_columns}")
-    if data.select(pl.all().is_null().any()).to_series(0).any():
+    if data[['I', 'Q']].isnull().any().any():
         raise ValueError("CSV file contains missing values.")
-    i_values = data['I'].to_numpy()
-    q_values = data['Q'].to_numpy()
+    i_values = data['I'].to_numpy(dtype='float32')
+    q_values = data['Q'].to_numpy(dtype='float32')
     return torch.tensor(i_values + 1j * q_values, dtype=torch.cfloat)
 
 
@@ -39,8 +39,8 @@ class IQDataset(Dataset):
                  stride: int = 1):
         """
         Dataset для комплексных IQ-сигналов.
-        :param features: (N,) комплексный тензор
-        :param targets:  (N,) комплексный тензор
+        :param features: (N,2) тензор
+        :param targets:  (N,2) тензор
         :param nperseg: длина сегмента
         :param frame_length: длина фрейма (если None — используется сегментирование)
         :param stride: шаг фреймирования
@@ -81,8 +81,16 @@ class IQDataset(Dataset):
     def __len__(self):
         return self.features.shape[0]
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         return self.features[idx], self.targets[idx]
+
+
+def iq_normalizer(x):
+    x_mean = x.mean(dim=0)
+    x_std = x.std(dim=0)
+    x_std[x_std==0] = 1e-8
+    x_norm = (x - x_mean) / x_std
+    return x_norm
 
 
 def build_dataloaders(data_dict, frame_length, batch_size, batch_size_eval, arch=None):
@@ -107,8 +115,11 @@ def build_dataloaders(data_dict, frame_length, batch_size, batch_size_eval, arch
             y_val = utils.complex_to_iq(ilc_val_output)
         else:
             y_val = y_train
+    
+    x_train_norm = iq_normalizer(x_train)
+    y_train_norm = iq_normalizer(y_train)
         
-    train_set = IQDataset(x_train, y_train, nperseg=nperseg, frame_length=frame_length)
+    train_set = IQDataset(x_train_norm, y_train_norm, nperseg=nperseg, frame_length=frame_length)
     val_set = IQDataset(x_val, y_val, nperseg=nperseg, frame_length=None)
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)

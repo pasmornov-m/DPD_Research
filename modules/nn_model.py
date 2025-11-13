@@ -944,13 +944,15 @@ class BayesianLSTM(CustomLSTM):
             else:
                 self.gates_noise = torch.ones(4, dtype=self.dtype)
         
+        self.input_noise = self.input_noise.unsqueeze(1)
+        
         if clip:
             if self.config[0] == "L":
                 W_in_cat = torch.cat([self.W_in_to_ingate[None,:,:],
                                     self.W_in_to_forgetgate[None,:,:],
                                     self.W_in_to_cell[None,:,:],
                                     self.W_in_to_outgate[None,:,:]], dim=0)
-                log_alpha_w_in = utils.clip_func(2 * self.logsig_w_in - torch.log(W_in_cat**2 + self.epsilon))
+                log_alpha_w_in = utils.clip_func(2 * self.logsig_w_in - utils.safe_torch_log(W_in_cat**2))
                 self.input_w_clip = log_alpha_w_in <= self.thresh
 
                 W_hid_cat = torch.cat([self.W_hid_to_ingate[None,:,:],
@@ -1158,6 +1160,7 @@ class BayesianLSTM(CustomLSTM):
                 gates_noise_clipped[:, 2, :], 
                 gates_noise_clipped[:, 3, :])
 
+    @utils.complex_handler
     def forward(self, inputs, hid_init=None, deterministic: bool = False, clip: bool = False):
         """
         inputs: либо тензор (batch, seq_len, input_dim) либо список/tuple:
@@ -1197,10 +1200,14 @@ class BayesianLSTM(CustomLSTM):
 
         g0_gc0, g1_gc1, g2_gc2, g3_gc3 = self.prepare_gates_noise(num_batch)
         
+        # print(f"x.shape: {x.shape}")
+        # print(f"self.input_noise.shape: {self.input_noise.shape}")
+        # print(f"self.input_clip.shape: {self.input_clip.shape}")
+        
         x_eff = x * self.input_noise * self.input_clip
         input_preact = torch.matmul(x_eff, self.W_in)
         input_i, input_f, input_c, input_o = torch.chunk(input_preact, 4, dim=-1)
-
+        
         input_i = input_i * self.input_w_clip[0] + self.b_ingate
         input_f = input_f * self.input_w_clip[1] + self.b_forgetgate
         input_c = input_c * self.input_w_clip[2] + self.b_cell
