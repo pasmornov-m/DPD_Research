@@ -85,14 +85,6 @@ class IQDataset(Dataset):
         return self.features[idx], self.targets[idx]
 
 
-def iq_normalizer(x):
-    x_mean = x.mean(dim=0)
-    x_std = x.std(dim=0)
-    x_std[x_std==0] = 1e-8
-    x_norm = (x - x_mean) / x_std
-    return x_norm
-
-
 def build_dataloaders(data_dict, frame_length, batch_size, batch_size_eval, arch=None):
     nperseg = data_dict["config"]["nperseg"]
 
@@ -115,11 +107,8 @@ def build_dataloaders(data_dict, frame_length, batch_size, batch_size_eval, arch
             y_val = utils.complex_to_iq(ilc_val_output)
         else:
             y_val = y_train
-    
-    x_train_norm = iq_normalizer(x_train)
-    y_train_norm = iq_normalizer(y_train)
         
-    train_set = IQDataset(x_train_norm, y_train_norm, nperseg=nperseg, frame_length=frame_length)
+    train_set = IQDataset(x_train, y_train, nperseg=nperseg, frame_length=frame_length)
     val_set = IQDataset(x_val, y_val, nperseg=nperseg, frame_length=None)
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)

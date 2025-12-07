@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from modules.metrics import compute_mse
-from modules.utils import timer_decorator
+from modules.utils import timer_decorator, complex_handler
 import time
 from datetime import timedelta
 
@@ -30,7 +30,7 @@ def net_train(net,
               criterion,
               grad_clip_val):
     net = net.train()
-    losses = []
+    losses = 0
     for features, targets in dataloader:
         optimizer.zero_grad()
         out = net(features)
@@ -39,25 +39,24 @@ def net_train(net,
         if grad_clip_val != 0:
             nn.utils.clip_grad_norm_(net.parameters(), grad_clip_val)
         optimizer.step()
-        loss.detach()
-        losses.append(loss.item())
-    loss = sum(losses) / len(losses)
+        losses += loss.item() * features.size(0)
+    losses /= len(dataloader.dataset)
     return net, loss
 
 
 def net_eval(net, dataloader, criterion, metric_criterion=None):
     net = net.eval()
     with torch.no_grad():
-        losses = []
-        metric_losses = []
+        losses = 0
+        metric_losses = 0
         for features, targets in dataloader:
             outputs = net(features)
             loss = criterion(outputs, targets)
             metric_loss = metric_criterion(outputs, targets)
-            losses.append(loss.item())
-            metric_losses.append(metric_loss)
-    avg_loss = sum(losses) / len(losses)
-    avg_metric_loss = sum(metric_losses) / len(metric_losses)
+            losses += loss.item() * features.size(0)
+            metric_losses += metric_loss.item() * features.size(0)
+    avg_loss = losses / len(dataloader.dataset)
+    avg_metric_loss = metric_losses / len(dataloader.dataset)
     return avg_loss, avg_metric_loss
 
 
@@ -87,7 +86,6 @@ def train(net,
             print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}")
 
     print("===Training complete===")
-
 
 def net_inference(net, x):
     net = net.eval()

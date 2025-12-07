@@ -893,32 +893,32 @@ class BayesianLSTM(CustomLSTM):
     def generate_noise_and_clip(self, num_batch, deterministic=False, clip=False):
         if not deterministic:
             if self.config[0] in {"L", "N"}:
-                self.input_w_noise = torch.randn(4, self.num_inputs, self.num_units) * torch.exp(self.logsig_w_in)
-                self.hidden_w_noise = torch.randn(4, self.num_units, self.num_units) * torch.exp(self.logsig_w_hid)
+                self.input_w_noise = torch.randn(4, self.num_inputs, self.num_units, dtype=self.dtype) * torch.exp(self.logsig_w_in)
+                self.hidden_w_noise = torch.randn(4, self.num_units, self.num_units, dtype=self.dtype) * torch.exp(self.logsig_w_hid)
             else:
                 self.input_w_noise = torch.zeros(4)
                 self.hidden_w_noise = torch.zeros(4)
 
             if self.config[2] in {"L", "N"}:
-                self.input_noise = torch.randn(num_batch, self.num_inputs) * torch.exp(self.logsig_in) + self.mu_in
-                self.hidden_noise = torch.randn(num_batch, self.num_units) * torch.exp(self.logsig_hid) + self.mu_hid
+                self.input_noise = torch.randn(num_batch, self.num_inputs, dtype=self.dtype) * torch.exp(self.logsig_in) + self.mu_in
+                self.hidden_noise = torch.randn(num_batch, self.num_units, dtype=self.dtype) * torch.exp(self.logsig_hid) + self.mu_hid
             elif self.config[2] == "I":
-                self.input_noise = torch.randn(num_batch, self.num_inputs) * torch.exp(self.logsig_in) + self.mu_in
+                self.input_noise = torch.randn(num_batch, self.num_inputs, dtype=self.dtype) * torch.exp(self.logsig_in) + self.mu_in
                 self.hidden_noise = torch.ones(1)
             elif self.config[2] == "R":
                 self.input_noise = torch.ones(1)
-                self.hidden_noise = torch.randn(num_batch, self.num_units) * torch.exp(self.logsig_hid) + self.mu_hid
+                self.hidden_noise = torch.randn(num_batch, self.num_units, dtype=self.dtype) * torch.exp(self.logsig_hid) + self.mu_hid
             elif self.config[2] == "D":
-                self.input_noise = self.mu_in
-                self.hidden_noise = self.mu_hid
+                self.input_noise = self.mu_in.detach()
+                self.hidden_noise = self.mu_hid.detach()
             else:
                 self.input_noise = torch.ones(1)
                 self.hidden_noise = torch.ones(1)
         
             if self.config[1] in {"L", "N"}:
-                self.gates_noise = torch.randn(4, num_batch, self.num_units) * torch.exp(self.logsig_gates)[:, None, :] + self.mu_gates[:, None, :]
+                self.gates_noise = torch.randn(4, num_batch, self.num_units, dtype=self.dtype) * torch.exp(self.logsig_gates)[:, None, :] + self.mu_gates[:, None, :]
             elif self.config[1] == "D":
-                self.gates_noise = self.mu_gates
+                self.gates_noise = self.mu_gates.detach()
             else:
                 self.gates_noise = torch.ones(4)
         
@@ -927,20 +927,20 @@ class BayesianLSTM(CustomLSTM):
             self.hidden_w_noise = torch.zeros(4)
 
             if self.config[2] in {"L", "N", "D"}:
-                self.input_noise = self.mu_in
-                self.hidden_noise = self.mu_hid
+                self.input_noise = self.mu_in.detach().to(dtype=self.dtype).unsqueeze(0).expand(num_batch, -1)
+                self.hidden_noise = self.mu_hid.detach().to(dtype=self.dtype).unsqueeze(0).expand(num_batch, -1)
             elif self.config[2] == "I":
-                self.input_noise = self.mu_in
+                self.input_noise = self.mu_in.detach().to(dtype=self.dtype).unsqueeze(0).expand(num_batch, -1)
                 self.hidden_noise = torch.ones(1)
             elif self.config[2] == "R":
                 self.input_noise = torch.ones(1)
-                self.hidden_noise = self.mu_hid
+                self.hidden_noise = self.mu_hid.detach().to(dtype=self.dtype).unsqueeze(0).expand(num_batch, -1)
             else:
                 self.input_noise = torch.ones(1)
                 self.hidden_noise = torch.ones(1)
 
             if self.config[1] in {"L", "N", "D"}:
-                self.gates_noise = self.mu_gates
+                self.gates_noise = self.mu_gates.detach()
             else:
                 self.gates_noise = torch.ones(4, dtype=self.dtype)
         
@@ -953,38 +953,38 @@ class BayesianLSTM(CustomLSTM):
                                     self.W_in_to_cell[None,:,:],
                                     self.W_in_to_outgate[None,:,:]], dim=0)
                 log_alpha_w_in = utils.clip_func(2 * self.logsig_w_in - utils.safe_torch_log(W_in_cat**2))
-                self.input_w_clip = log_alpha_w_in <= self.thresh
+                self.input_w_clip = (log_alpha_w_in <= self.thresh).to(dtype=self.dtype)
 
                 W_hid_cat = torch.cat([self.W_hid_to_ingate[None,:,:],
                                     self.W_hid_to_forgetgate[None,:,:],
                                     self.W_hid_to_cell[None,:,:],
                                     self.W_hid_to_outgate[None,:,:]], dim=0)
                 log_alpha_w_hid = utils.clip_func(2 * self.logsig_w_hid - utils.safe_torch_log(W_hid_cat**2))
-                self.hidden_w_clip = log_alpha_w_hid <= self.thresh
+                self.hidden_w_clip = (log_alpha_w_hid <= self.thresh).to(dtype=self.dtype)
             else:
                 self.input_w_clip = torch.ones(4)
                 self.hidden_w_clip = torch.ones(4)
 
             if self.config[2] == "L":
                 log_alpha_in = utils.clip_func(2 * self.logsig_in - utils.safe_torch_log(self.mu_in**2))
-                self.input_clip = log_alpha_in <= self.thresh
+                self.input_clip = (log_alpha_in <= self.thresh).to(dtype=self.dtype)
                 log_alpha_hid = utils.clip_func(2 * self.logsig_hid - utils.safe_torch_log(self.mu_hid**2))
-                self.hidden_clip = log_alpha_hid <= self.thresh
+                self.hidden_clip = (log_alpha_hid <= self.thresh).to(dtype=self.dtype)
             elif self.config[2] == "I":
                 log_alpha_in = utils.clip_func(2 * self.logsig_in - utils.safe_torch_log(self.mu_in**2))
-                self.input_clip = log_alpha_in <= self.thresh
+                self.input_clip = (log_alpha_in <= self.thresh).to(dtype=self.dtype)
                 self.hidden_clip = torch.ones(1)
             elif self.config[2] == "R":
                 self.input_clip = torch.ones(1)
                 log_alpha_hid = utils.clip_func(2 * self.logsig_hid - utils.safe_torch_log(self.mu_hid**2))
-                self.hidden_clip = log_alpha_hid <= self.thresh
+                self.hidden_clip = (log_alpha_hid <= self.thresh).to(dtype=self.dtype)
             else:
                 self.input_clip = torch.ones(1)
                 self.hidden_clip = torch.ones(1)
 
             if self.config[1] == "L":
                 log_alpha_gates = utils.clip_func(2 * self.logsig_gates - utils.safe_torch_log(self.mu_gates**2))
-                self.gates_clip = log_alpha_gates <= self.thresh
+                self.gates_clip = (log_alpha_gates <= self.thresh).to(dtype=self.dtype)
             else:
                 self.gates_clip = torch.ones(4)
         
@@ -1196,22 +1196,28 @@ class BayesianLSTM(CustomLSTM):
         cell_out = torch.empty_like(hid_out)
  
         self.generate_noise_and_clip(num_batch, deterministic, clip)
-        hidden_w_clip = self.hidden_w_clip.repeat_interleave(self.num_units)
+
+        self.input_w_clip = self.input_w_clip.view(1, 4, 1).expand(1, 4, self.num_units).reshape(1, 4 * self.num_units)
+        self.hidden_w_clip = self.hidden_w_clip.view(4, 1).expand(4, self.num_units).reshape(1, 4 * self.num_units)
 
         g0_gc0, g1_gc1, g2_gc2, g3_gc3 = self.prepare_gates_noise(num_batch)
         
-        # print(f"x.shape: {x.shape}")
-        # print(f"self.input_noise.shape: {self.input_noise.shape}")
-        # print(f"self.input_clip.shape: {self.input_clip.shape}")
+        W_in_masked = self.W_in * self.input_w_clip
         
         x_eff = x * self.input_noise * self.input_clip
-        input_preact = torch.matmul(x_eff, self.W_in)
+        input_preact = torch.matmul(x_eff, W_in_masked)
+        
         input_i, input_f, input_c, input_o = torch.chunk(input_preact, 4, dim=-1)
         
-        input_i = input_i * self.input_w_clip[0] + self.b_ingate
-        input_f = input_f * self.input_w_clip[1] + self.b_forgetgate
-        input_c = input_c * self.input_w_clip[2] + self.b_cell
-        input_o = input_o * self.input_w_clip[3] + self.b_outgate
+        input_i = input_i + self.b_ingate
+        input_f = input_f + self.b_forgetgate
+        input_c = input_c + self.b_cell
+        input_o = input_o + self.b_outgate
+        
+        # input_i = input_i * self.input_w_clip[0] + self.b_ingate
+        # input_f = input_f * self.input_w_clip[1] + self.b_forgetgate
+        # input_c = input_c * self.input_w_clip[2] + self.b_cell
+        # input_o = input_o * self.input_w_clip[3] + self.b_outgate
         
         if self.hid_prop and hid_init is not None:
             hid = hid_init[0].to(dtype=self.dtype)
@@ -1237,7 +1243,7 @@ class BayesianLSTM(CustomLSTM):
             
             hid_preact = hid @ self.W_hid
             
-            hid_preact = hid_preact * hidden_w_clip
+            hid_preact = hid_preact * self.hidden_w_clip
             hid_preact_i, hid_preact_f, hid_preact_c, hid_preact_o = torch.chunk(hid_preact, 4, dim=1)
 
             ingate = self.nonlinearity_ingate((input_n_i + hid_preact_i) * g0_gc0 + self.b_ingate)
@@ -1304,9 +1310,9 @@ class Dense(nn.Module):
         input: tensor with last dim == incoming, arbitrary leading dims allowed
         returns: tensor with same leading dims and last dim == num_units
         """
-        lin = self.pre_activation(input)
-        lin = lin + self.b
-        return self.nonlinearity(lin)
+        out = self.pre_activation(input) + self.b
+        out = self.nonlinearity(out)
+        return out
 
 class BayesianDense(Dense):
     def __init__(self, 
@@ -1367,7 +1373,6 @@ class BayesianDense(Dense):
             noise = torch.randn((mu.shape[0], 1, mu.shape[2]))
 
         return mu + noise * si
-        
 
     def eval_reg(self, train_size: float):
         """
