@@ -2,6 +2,7 @@
 /MY_DATASET
 /.vscode
 /.pytest_cache
+/logs
 
 dev_ar_&_moe.ipynb
 

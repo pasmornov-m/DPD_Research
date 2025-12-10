@@ -3,7 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 from scipy.signal import welch, get_window, lfilter
-from modules.utils import to_torch_tensor, iq_to_complex
+from modules.utils import to_torch_tensor, iq_to_complex, moving_average
 from typing import Tuple
 
 
@@ -101,13 +101,16 @@ def compute_signal_power(signal: torch.Tensor) -> torch.Tensor:
     return power
 
 
-def power_spectrum(input_data, fs, nperseg):
+def power_spectrum(input_data, fs, nperseg, window_size=None):
     if isinstance(input_data, torch.Tensor):
         input_data = input_data.detach().cpu().numpy()
     _, spectrum = welch(input_data, fs=fs, nperseg=nperseg)
     freqs = np.fft.fftshift(np.fft.fftfreq(len(spectrum), d=1/fs))
     spectrum = np.fft.fftshift(spectrum)
-    return freqs, spectrum
+    if window_size:
+        freqs, spectrum = moving_average(spectrum, freqs, fs, window_size)
+    spectrum_db = 10 * np.log10(np.abs(spectrum))
+    return freqs, spectrum_db
 
 
 def calculate_acpr(input_data, acpr_meter):

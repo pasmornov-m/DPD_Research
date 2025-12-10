@@ -164,8 +164,12 @@ class CascadeModel(nn.Module):
         self.gain = gain
         self.cascade_type = cascade_type
 
-    def forward(self, x):
-        x = self.model_1(x)
+    def forward(self, x, deterministic=None):
+        if deterministic:
+            x = self.model_1(x, deterministic=True)
+        else:
+            x = self.model_1(x)
+            
         if self.cascade_type == "ila" and self.gain:
             x = x / self.gain
         x = self.model_2(x)

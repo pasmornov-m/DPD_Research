@@ -2,8 +2,8 @@ import torch
 from torch import nn
 from modules.metrics import compute_mse
 from modules.utils import timer_decorator, complex_handler
-import time
-from datetime import timedelta
+# import time
+# from datetime import timedelta
 
 
 @timer_decorator
@@ -44,19 +44,23 @@ def net_train(net,
     return net, loss
 
 
-def net_eval(net, dataloader, criterion, metric_criterion=None):
+def net_eval(net, dataloader, scheduler, criterion, metric_criterion=None):
     net = net.eval()
     with torch.no_grad():
-        losses = 0
-        metric_losses = 0
+        val_loss = 0
+        metric_val_loss = 0
         for features, targets in dataloader:
             outputs = net(features)
             loss = criterion(outputs, targets)
             metric_loss = metric_criterion(outputs, targets)
-            losses += loss.item() * features.size(0)
-            metric_losses += metric_loss.item() * features.size(0)
-    avg_loss = losses / len(dataloader.dataset)
-    avg_metric_loss = metric_losses / len(dataloader.dataset)
+            val_loss += loss.item() * features.size(0)
+            metric_val_loss += metric_loss.item() * features.size(0)
+    avg_loss = val_loss / len(dataloader.dataset)
+    avg_metric_loss = metric_val_loss / len(dataloader.dataset)
+    
+    if scheduler:
+        scheduler.step(avg_loss)
+        
     return avg_loss, avg_metric_loss
 
 
@@ -68,6 +72,7 @@ def train(net,
           val_loader, 
           n_epochs,
           metric_criterion,
+          scheduler=None,
           grad_clip_val=0):
     print("===Start training===")
     for epoch in range(n_epochs):
@@ -78,17 +83,25 @@ def train(net,
                         grad_clip_val=grad_clip_val)
 
         val_loss, val_metric_loss = net_eval(net=net,
-                                             criterion=criterion,
                                              dataloader=val_loader,
-                                             metric_criterion=metric_criterion)
+                                             criterion=criterion,
+                                             metric_criterion=metric_criterion,
+                                             scheduler=scheduler)
         
         if epoch % 1 == 0 or epoch == n_epochs - 1:
-            print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}")
+            if scheduler:
+                print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}, lr: {scheduler.get_last_lr()[0]}")
+            else:
+                print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}")
 
     print("===Training complete===")
 
-def net_inference(net, x):
+
+def net_inference(net, x, deterministic=None):
     net = net.eval()
     with torch.no_grad():
-        y = net(x)
+        if deterministic:
+            y = net(x, deterministic=deterministic)
+        else:
+            y = net(x)
     return y
