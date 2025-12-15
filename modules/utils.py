@@ -62,12 +62,13 @@ def complex_handler(forward_func):
     @functools.wraps(forward_func)
     def wrapper(self, inputs, *args, **kwargs):
         is_complex = inputs.is_complex()
+        add_batch_dim = (inputs.dim() == 2)
 
         if is_complex:
             inputs = complex_to_iq(inputs)
             inputs = inputs.unsqueeze(0)
-        else:
-            inputs = inputs
+        if add_batch_dim:
+            inputs = inputs.unsqueeze(0)
         
         result = forward_func(self, inputs, *args, **kwargs)
         
@@ -77,9 +78,12 @@ def complex_handler(forward_func):
         if is_complex:
             result = torch.squeeze(result)
             result = iq_to_complex(result)
+        if add_batch_dim:
+            result = result.squeeze(0)
         
         return result
     return wrapper
+
 
 def iq_handler(forward_func):
     @functools.wraps(forward_func)

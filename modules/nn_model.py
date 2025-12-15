@@ -1341,7 +1341,7 @@ class BayesianDense(Dense):
 
         self.W = nn.Parameter(torch.empty(self.num_inputs, self.num_units, dtype=self.dtype))
         self.b = nn.Parameter(torch.full((self.num_units,), float(b_init), dtype=self.dtype))
-        self.log_sigma = nn.Parameter(torch.full((self.num_inputs, self.num_units), float(log_sigma_init), dtype=self.dtype))
+        self.logsig = nn.Parameter(torch.full((self.num_inputs, self.num_units), float(log_sigma_init), dtype=self.dtype))
 
         if W_initializer is None:
             nn.init.xavier_uniform_(self.W)
@@ -1354,10 +1354,10 @@ class BayesianDense(Dense):
         Возвращает: mu + шум*si (или только mu в deterministic режиме)
         """
         W_eff = self.W
-        sigma2 = torch.exp(2.0 * self.log_sigma)
+        sigma2 = torch.exp(2.0 * self.logsig)
 
         if clip:
-            log_alpha = utils.clip_func(2.0 * self.log_sigma - utils.safe_torch_log(W_eff.pow(2)))
+            log_alpha = utils.clip_func(2.0 * self.logsig - utils.safe_torch_log(W_eff.pow(2)))
             clip_mask = log_alpha.ge(self.thresh)
             W_eff = torch.where(clip_mask, torch.zeros_like(W_eff), W_eff)
             sigma2 = torch.where(clip_mask, torch.zeros_like(sigma2), sigma2)
@@ -1377,10 +1377,10 @@ class BayesianDense(Dense):
 
     def eval_reg(self, train_size: float):
         """
-        alpha regularization: utils.alpha_regf(clip_func(2*log_sigma - log(W^2))).sum() / train_size
+        alpha regularization: utils.alpha_regf(clip_func(2*logsig - log(W^2))).sum() / train_size
         Возвращаем torch scalar
         """
-        log_alpha = utils.clip_func(2.0 * self.log_sigma - utils.safe_torch_log(self.W.pow(2)))
+        log_alpha = utils.clip_func(2.0 * self.logsig - utils.safe_torch_log(self.W.pow(2)))
         reg = utils.alpha_regf(log_alpha).sum() / float(train_size)
         return reg
 
@@ -1390,8 +1390,8 @@ class BayesianDense(Dense):
         Маска не требует градиентов и используется для sparsification.
         """
         W = self.W.detach()
-        log_sigma = self.log_sigma.detach()
-        log_alpha = 2.0 * log_sigma - 2.0 * utils.safe_torch_log(torch.abs(W))
+        logsig = self.logsig.detach()
+        log_alpha = 2.0 * logsig - 2.0 * utils.safe_torch_log(torch.abs(W))
         mask = (log_alpha < self.thresh)
 
         return {"w": mask}
@@ -1433,7 +1433,7 @@ class BayesianDense_noLRT(Dense):
 
         self.W = nn.Parameter(torch.empty(self.num_inputs, self.num_units, dtype=torch.float32))
         self.b = nn.Parameter(torch.full((self.num_units,), float(b_init), dtype=torch.float32))
-        self.log_sigma = nn.Parameter(torch.full((self.num_inputs, self.num_units), float(log_sigma_init), dtype=torch.float32))
+        self.logsig = nn.Parameter(torch.full((self.num_inputs, self.num_units), float(log_sigma_init), dtype=torch.float32))
 
         if W_initializer is None:
             nn.init.xavier_uniform_(self.W)
@@ -1447,11 +1447,11 @@ class BayesianDense_noLRT(Dense):
         """
         input: 2D (batch, in) или 3D (batch, seq_len, in) (и др. формы с последним измерением in)
         """
-        sigma2 = torch.exp(2 * self.log_sigma)
+        sigma2 = torch.exp(2 * self.logsig)
         W_eff = self.W
         
         if clip:
-            log_alpha = utils.clip_func(2 * self.log_sigma - utils.safe_torch_log(self.W.pow(2)))
+            log_alpha = utils.clip_func(2 * self.logsig - utils.safe_torch_log(self.W.pow(2)))
             clip_mask = log_alpha.ge(self.thresh)
             W_eff = torch.where(clip_mask, torch.zeros_like(W_eff), W_eff)
             sigma2 = torch.where(clip_mask, torch.zeros_like(sigma2), sigma2)
@@ -1464,18 +1464,18 @@ class BayesianDense_noLRT(Dense):
             si = torch.sqrt(input.pow(2) @ sigma2 + 1e-8)
             return mu + torch.randn_like(mu) * si
         else:
-            W_noisy = W_eff + torch.randn_like(W_eff) * torch.exp(self.log_sigma)
+            W_noisy = W_eff + torch.randn_like(W_eff) * torch.exp(self.logsig)
             return input @ W_noisy
 
     def eval_reg(self, train_size: float):
-        log_alpha = utils.clip_func(2 * self.log_sigma - utils.safe_torch_log(self.W.pow(2)))
+        log_alpha = utils.clip_func(2 * self.logsig - utils.safe_torch_log(self.W.pow(2)))
         reg = utils.alpha_regf(log_alpha).sum() / float(train_size)
         return reg
     
     def get_ard(self) -> dict[str, torch.Tensor]:
         W = self.W.detach()
-        log_sigma = self.log_sigma.detach()
-        log_alpha = 2 * log_sigma - 2 * utils.safe_torch_log(torch.abs(W))
+        logsig = self.logsig.detach()
+        log_alpha = 2 * logsig - 2 * utils.safe_torch_log(torch.abs(W))
         mask = (log_alpha < self.thresh)
         return {"w": mask}
     

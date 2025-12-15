@@ -1,12 +1,11 @@
 import torch
 from torch import nn
-from modules.metrics import compute_mse
-from modules.utils import timer_decorator, complex_handler
+from modules import metrics, utils
 # import time
 # from datetime import timedelta
 
 
-@timer_decorator
+@utils.timer_decorator
 def ilc_signal(input_data, target_data, pa_model, epochs=100, learning_rate=0.1):
     u = torch.nn.Parameter(input_data.clone(), requires_grad=True)
     optimizer = torch.optim.Adam([u], lr=learning_rate)
@@ -15,7 +14,7 @@ def ilc_signal(input_data, target_data, pa_model, epochs=100, learning_rate=0.1)
     for epoch in range(epochs):
         optimizer.zero_grad()
         pa_output = pa_model.forward(u)
-        loss = compute_mse(pa_output, target_data)
+        loss = metrics.compute_mse(pa_output, target_data)
         loss.backward()
         optimizer.step()
 
@@ -64,7 +63,7 @@ def net_eval(net, dataloader, scheduler, criterion, metric_criterion=None):
     return avg_loss, avg_metric_loss
 
 
-@timer_decorator
+@utils.timer_decorator
 def train(net, 
           criterion, 
           optimizer,
@@ -98,10 +97,25 @@ def train(net,
 
 
 def net_inference(net, x, deterministic=None):
+    is_complex = x.is_complex()
+
+    if is_complex:
+        x = utils.complex_to_iq(x)
+    
+    if x.dim() == 2:
+        x = x.unsqueeze(0)
+    
     net = net.eval()
     with torch.no_grad():
         if deterministic:
-            y = net(x, deterministic=deterministic)
+            result = net(x, deterministic=deterministic)
         else:
-            y = net(x)
-    return y
+            result = net(x)
+    
+    if result is None:
+        return
+    if is_complex:
+        result = torch.squeeze(result)
+        result = utils.iq_to_complex(result)
+        
+    return result
