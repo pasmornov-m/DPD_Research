@@ -1,10 +1,45 @@
 import torch
 from torch import nn
-from torch.autograd import Variable
 import numpy as np
 import os
 from modules import utils
 from pytorch_tcn import TCN
+
+
+class BaseModel(nn.Module):
+    def __init__(self, model_name=""):
+        super().__init__()
+        self.model_name = model_name
+        self.class_name = self.__class__.__name__
+        self.filename = self._get_filename()
+
+    @utils.complex_handler
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x
+    
+    def count_params(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+    
+    def _get_filename(self) -> str:
+        return ""
+
+    def save_weights(self, directory="model_params"):
+        os.makedirs(directory, exist_ok=True)
+        full_path = (f"{directory}/{self.filename}")
+        torch.save(self.state_dict(), full_path)
+        print(f"Model weights saved to {full_path}")
+
+    def load_weights(self, directory="model_params") -> bool:
+        full_path = (f"{directory}/{self.filename}")
+        if os.path.isfile(full_path):
+            state_dict = torch.load(full_path, map_location="cpu")
+            self.load_state_dict(state_dict)
+            print(f"Model weights loaded from {full_path}")
+            return True
+        else:
+            print(f"No saved weights found at {full_path}, initializing new parameters.")
+            return False
+
 
 
 class GRU(nn.Module):
@@ -54,8 +89,7 @@ class GRU(nn.Module):
         filename = (
             f"{directory}/{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
-            f"in{self.input_size}_out{self.output_size}.pt"
-        )
+            f"in{self.input_size}_out{self.output_size}_bi{self.bidirectional}.pt")
         torch.save(self.state_dict(), filename)
         print(f"Model weights saved to {filename}")
 
@@ -63,7 +97,7 @@ class GRU(nn.Module):
         filename = (
             f"{directory}/{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
-            f"in{self.input_size}_out{self.output_size}.pt")
+            f"in{self.input_size}_out{self.output_size}_bi{self.bidirectional}.pt")
         if os.path.isfile(filename):
             state_dict = torch.load(filename)
             self.load_state_dict(state_dict)
@@ -87,6 +121,7 @@ class LSTM(nn.Module):
         self.bidirectional = bidirectional
         self.batch_first = batch_first
         self.bias = bias
+        self.num_directions = 2 if bidirectional else 1
         self.model_name = model_name
         self.class_name = self.__class__.__name__
 
@@ -96,17 +131,32 @@ class LSTM(nn.Module):
                           bidirectional=self.bidirectional,
                           batch_first=self.batch_first,
                           bias=self.bias)
-        self.fc_out = nn.Linear(in_features=self.hidden_size,
+        self.fc_1 = nn.Linear(in_features=hidden_size*self.num_directions,
+                                out_features=150,
+                                bias=self.bias)
+        self.fc_2 = nn.Linear(in_features=150,
+                                out_features=200,
+                                bias=self.bias)
+        self.fc_out = nn.Linear(in_features=200,
                                 out_features=self.output_size,
                                 bias=self.bias)
 
     @utils.complex_handler
     def forward(self, x, h_0=None):
-        if h_0 is None:
-            batch_size = x.size(0)
-            h_0 = torch.zeros(self.num_layers, batch_size, self.hidden_size)
-        out, (_, _) = self.lstm(x, (h_0, h_0))
-        y = self.fc_out(out)
+        batch_size = x.size(0)
+        
+        if h_0 is None or c_0 is None:
+            h_0 = torch.zeros(self.num_directions * self.num_layers, 
+                            batch_size, 
+                            self.hidden_size)
+            c_0 = torch.zeros(self.num_directions * self.num_layers, 
+                            batch_size, 
+                            self.hidden_size)
+        
+        y, (h_n, c_n) = self.lstm(x, (h_0, c_0))
+        y = self.fc_1(y)
+        y = self.fc_2(y)
+        y = self.fc_out(y)
         return y
 
     def count_params(self):
@@ -117,7 +167,7 @@ class LSTM(nn.Module):
         filename = (
             f"{directory}/{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
-            f"in{self.input_size}_out{self.output_size}.pt"
+            f"in{self.input_size}_out{self.output_size}_bi{int(self.bidirectional)}.pt"
         )
         torch.save(self.state_dict(), filename)
         print(f"Model weights saved to {filename}")
@@ -126,7 +176,7 @@ class LSTM(nn.Module):
         filename = (
             f"{directory}/{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
-            f"in{self.input_size}_out{self.output_size}.pt")
+            f"in{self.input_size}_out{self.output_size}_bi{int(self.bidirectional)}.pt")
         if os.path.isfile(filename):
             state_dict = torch.load(filename)
             self.load_state_dict(state_dict)
@@ -158,7 +208,6 @@ class CustomTCN(TCN):
         self.input_shape = input_shape
         self.model_name = model_name
         self.class_name = self.__class__.__name__
-
 
     @utils.complex_handler
     def forward(self, x, *args, **kwargs):
@@ -1305,7 +1354,7 @@ class Dense(nn.Module):
     def get_ard(self):
         return {"w": torch.ones_like(self.W)}
     
-    def forward(self, input):
+    def forward(self, input, **kwargs):
         """
         input: tensor with last dim == incoming, arbitrary leading dims allowed
         returns: tensor with same leading dims and last dim == num_units

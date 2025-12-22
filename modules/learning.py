@@ -40,7 +40,7 @@ def net_train(net,
         optimizer.step()
         losses += loss.item() * features.size(0)
     losses /= len(dataloader.dataset)
-    return net, loss
+    return net, losses
 
 
 def net_eval(net, dataloader, scheduler, criterion, metric_criterion=None):
@@ -94,6 +94,76 @@ def train(net,
                 print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}")
 
     print("===Training complete===")
+    
+
+class ModelTrainer:
+    def __init__(self,
+                 net, 
+                 optimizer,
+                 train_loader, 
+                 val_loader,
+                 criterion, 
+                 metric_criterion,
+                 grad_clip_val: int = 0,
+                 scheduler=None):
+        
+        self.net = net
+        self.optimizer = optimizer
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.criterion = criterion
+        self.metric_criterion = metric_criterion
+        self.scheduler = scheduler
+        self.grad_clip_val = grad_clip_val
+    
+    @utils.timer_decorator
+    def train(self, epochs: int):
+        print("===Start training===")
+        for epoch in range(epochs):
+            train_loss = self._net_train()
+            val_loss, val_metric_loss = self._net_eval()
+            self._print_log(epoch, train_loss, val_loss, val_metric_loss)
+        print("===Training complete===")
+    
+    def _print_log(self, epoch, train_loss, val_loss, val_metric_loss):
+        if self.scheduler:
+            print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}, lr: {self.scheduler.get_last_lr()[0]}")
+        else:
+            print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}")
+            
+    def _net_train(self):
+        self.net.train()
+        losses = 0
+        for features, targets in self.train_loader:
+            self.optimizer.zero_grad()
+            out = self.net(features)
+            loss = self.criterion(out, targets)
+            loss.backward()
+            if self.grad_clip_val != 0:
+                nn.utils.clip_grad_norm_(self.net.parameters(), self.grad_clip_val)
+            self.optimizer.step()
+            losses += loss.item() * features.size(0)
+        losses /= len(self.train_loader.dataset)
+        return losses
+    
+    def _net_eval(self):
+        self.net.eval()
+        with torch.no_grad():
+            val_loss = 0
+            metric_val_loss = 0
+            for features, targets in self.val_loader:
+                outputs = self.net(features)
+                loss = self.criterion(outputs, targets)
+                metric_loss = self.metric_criterion(outputs, targets)
+                val_loss += loss.item() * features.size(0)
+                metric_val_loss += metric_loss.item() * features.size(0)
+        avg_loss = val_loss / len(self.val_loader.dataset)
+        avg_metric_loss = metric_val_loss / len(self.val_loader.dataset)
+        
+        if self.scheduler:
+            self.scheduler.step(avg_loss)
+            
+        return avg_loss, avg_metric_loss
 
 
 def net_inference(net, x, deterministic=None):

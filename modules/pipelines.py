@@ -46,7 +46,7 @@ class SimplePipeline():
 
         self.results = {}
         
-        self.criterion = metrics.compute_nmse
+        self.criterion = metrics.compute_mse
         self.metric_criterion = metrics.compute_nmse
         
         self.frame_length = None
@@ -80,7 +80,8 @@ class SimplePipeline():
                                                        Mc=self.train_props["gmp_degree"])
         elif issubclass(self.base_model, (GRU, LSTM)):
             self.model_params = {"hidden_size": self.train_props["hidden_size"], 
-                                 "num_layers": self.train_props["num_layers"]}
+                                 "num_layers": self.train_props["num_layers"],
+                                 "bidirectional": self.train_props["bidirectional"]}
         elif issubclass(self.base_model, DenseNetRegressor):
             self.model_params = {"blocks": self.train_props["blocks"]}
         elif issubclass(self.base_model, TCN):
@@ -130,7 +131,10 @@ class SimplePipeline():
                                                                             arch="ila")
         
     def _build_optimizer(self, model):
-        return torch.optim.AdamW(model.parameters(), lr=self.lr, amsgrad=True)
+        return torch.optim.AdamW(model.parameters(), lr=self.lr)
+    
+    def _build_scheduler(self, optimizer):
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
         
     def run_pa(self):
         print("Run PA")
@@ -172,6 +176,7 @@ class SimplePipeline():
         casc_dla = utils.CascadeModel(model_1=dpd_model, 
                                         model_2=self.pa_model)
         optimizer = self._build_optimizer(casc_dla)
+        scheduler = self._build_scheduler(optimizer)
 
         time_train = 0
         if not is_load:
@@ -183,7 +188,8 @@ class SimplePipeline():
                         val_loader=self.dla_val_loader, 
                         grad_clip_val=self.grad_clip_val, 
                         n_epochs=self.epochs, 
-                        metric_criterion=self.metric_criterion)
+                        metric_criterion=self.metric_criterion,
+                        scheduler=scheduler)
             elapsed = time.time() - start
             time_train = timedelta(seconds=round(elapsed))
             dpd_model.save_weights()
@@ -207,6 +213,7 @@ class SimplePipeline():
         casc_ila_train = utils.CascadeModel(model_1=self.pa_model, model_2=dpd_model, gain=self.gain, cascade_type="ila")
         casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
         optimizer = self._build_optimizer(casc_ila_train)
+        scheduler = self._build_scheduler(optimizer)
 
         time_train = 0
         if not is_load:
@@ -218,7 +225,8 @@ class SimplePipeline():
                         val_loader=self.ila_val_loader, 
                         grad_clip_val=self.grad_clip_val, 
                         n_epochs=self.epochs, 
-                        metric_criterion=self.metric_criterion)
+                        metric_criterion=self.metric_criterion,
+                        scheduler=scheduler)
             elapsed = time.time() - start
             time_train = timedelta(seconds=round(elapsed))
             dpd_model.save_weights()
@@ -234,16 +242,16 @@ class SimplePipeline():
             "y_val_ila": y_val_ila,
             "time_train": time_train
         }
-        
-    def run_ilc(self):
-        print("Run ILC")
-        time_train = 0
-        start = time.time()
-        
+    
+    def _evaluate_ilc_signal(self):
         if self.u_k_train is None:
             self.u_k_train = learning.ilc_signal(self.x_train, self.y_train_target, self.pa_model, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
         if self.u_k_val is None:
             self.u_k_val = learning.ilc_signal(self.x_val, self.y_val_target, self.pa_model, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
+            
+        time_train = 0
+        start = time.time()
+        
         self.u_k_pa = self.pa_model.forward(self.u_k_train).detach()
         
         elapsed = time.time() - start
@@ -263,22 +271,29 @@ class SimplePipeline():
             "time_train": time_train
         }
         
-        if issubclass(self.base_model, ClassicGMP):
-            self.ilc_train_loader = [(self.x_train, self.u_k_train)]
-            self.ilc_val_loader = self.ilc_train_loader
-        else:
-            self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(data_dict=self.data, 
-                                                                            frame_length=self.frame_length, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                            arch="ilc")
+    def run_ilc(self):
+        print("Run ILC")
 
         dpd_model = self.base_model(**self.model_params, model_name="ilc")
         is_load = dpd_model.load_weights()
         optimizer = self._build_optimizer(dpd_model)
+        scheduler = self._build_scheduler(optimizer)
         
         time_train = 0
         if not is_load:
+            
+            self._evaluate_ilc_signal()
+            
+            if issubclass(self.base_model, ClassicGMP):
+                self.ilc_train_loader = [(self.x_train, self.u_k_train)]
+                self.ilc_val_loader = self.ilc_train_loader
+            else:
+                self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(data_dict=self.data, 
+                                                                                frame_length=self.frame_length, 
+                                                                                batch_size=self.batch_size, 
+                                                                                batch_size_eval=self.batch_size_eval, 
+                                                                                arch="ilc")
+            
             start = time.time()
             learning.train(net=dpd_model, 
                         criterion=self.criterion, 
@@ -287,7 +302,8 @@ class SimplePipeline():
                         val_loader=self.ilc_val_loader, 
                         grad_clip_val=self.grad_clip_val, 
                         n_epochs=self.epochs, 
-                        metric_criterion=self.metric_criterion)
+                        metric_criterion=self.metric_criterion,
+                        scheduler=scheduler)
             elapsed = time.time() - start
             time_train = timedelta(seconds=round(elapsed))
             dpd_model.save_weights()
@@ -437,6 +453,9 @@ class SnrPipeline:
     def _build_optimizer(self, model):
         return torch.optim.AdamW(model.parameters(), lr=self.lr)
     
+    def _build_scheduler(self, optimizer):
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
+    
     def _create_pa_noise_cascade(self, snr):
         noise_gen_model = utils.NoiseModel(snr=snr, fs=self.fs, bw=self.bw_main_ch)
         casc_pa_noise = utils.CascadeModel(model_1=self.pa_model, model_2=noise_gen_model)
@@ -450,6 +469,7 @@ class SnrPipeline:
             casc_dla = utils.CascadeModel(model_1=dpd_model, 
                                             model_2=casc_pa_noise)
             optimizer = self._build_optimizer(casc_dla)
+            scheduler = self._build_scheduler(optimizer)
 
             learning.train(net=casc_dla, 
                         criterion=self.criterion, 
@@ -458,7 +478,8 @@ class SnrPipeline:
                         val_loader=self.dla_val_loader, 
                         grad_clip_val=self.grad_clip_val, 
                         n_epochs=self.epochs, 
-                        metric_criterion=self.metric_criterion)
+                        metric_criterion=self.metric_criterion,
+                        scheduler=scheduler)
 
             nmse, acpr_left, acpr_right = metrics.noise_realizations(self.num_realizations, 
                                                             model=casc_dla, 
@@ -479,6 +500,7 @@ class SnrPipeline:
             casc_ila_train = utils.CascadeModel(model_1=casc_pa_noise, model_2=dpd_model, gain=self.gain, cascade_type="ila")
             casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=casc_pa_noise)
             optimizer = self._build_optimizer(casc_ila_train)
+            scheduler = self._build_scheduler(optimizer)
 
             learning.train(net=casc_ila_train, 
                         criterion=self.criterion, 
@@ -487,7 +509,8 @@ class SnrPipeline:
                         val_loader=self.ila_val_loader, 
                         grad_clip_val=self.grad_clip_val, 
                         n_epochs=self.epochs, 
-                        metric_criterion=self.metric_criterion)
+                        metric_criterion=self.metric_criterion,
+                        scheduler=scheduler)
 
             nmse, acpr_left, acpr_right = metrics.noise_realizations(self.num_realizations, 
                                                             model=casc_ila_eval, 
@@ -533,6 +556,8 @@ class SnrPipeline:
 
             dpd_model = self.base_model(**self.model_params)
             optimizer = self._build_optimizer(dpd_model)
+            scheduler = self._build_scheduler(optimizer)
+            
             learning.train(net=dpd_model, 
                         criterion=self.criterion, 
                         optimizer=optimizer, 
@@ -540,7 +565,8 @@ class SnrPipeline:
                         val_loader=self.ilc_val_loader, 
                         grad_clip_val=self.grad_clip_val, 
                         n_epochs=self.epochs, 
-                        metric_criterion=self.metric_criterion)
+                        metric_criterion=self.metric_criterion,
+                        scheduler=scheduler)
 
             casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
             nmse, acpr_left, acpr_right = metrics.noise_realizations(self.num_realizations, 
