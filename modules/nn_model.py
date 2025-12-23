@@ -6,31 +6,32 @@ from modules import utils
 from pytorch_tcn import TCN
 
 
-class BaseModel(nn.Module):
-    def __init__(self, model_name=""):
-        super().__init__()
+class BaseModel:
+    def __init__(self, model_name: str = ""):
         self.model_name = model_name
         self.class_name = self.__class__.__name__
-        self.filename = self._get_filename()
-
-    @utils.complex_handler
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x
+        self._filename = None
     
     def count_params(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
     
-    def _get_filename(self) -> str:
-        return ""
-
-    def save_weights(self, directory="model_params"):
+    @property
+    def filename(self):
+        if self._filename is None:
+            self._filename = self._get_filename()
+        return self._filename
+    
+    def _get_filename(self):
+        raise NotImplementedError
+    
+    def save_weights(self, directory: str = "model_params"):
         os.makedirs(directory, exist_ok=True)
-        full_path = (f"{directory}/{self.filename}")
+        full_path = f"{directory}/{self.filename}"
         torch.save(self.state_dict(), full_path)
         print(f"Model weights saved to {full_path}")
 
-    def load_weights(self, directory="model_params") -> bool:
-        full_path = (f"{directory}/{self.filename}")
+    def load_weights(self, directory: str = "model_params") -> bool:
+        full_path = f"{directory}/{self.filename}"
         if os.path.isfile(full_path):
             state_dict = torch.load(full_path, map_location="cpu")
             self.load_state_dict(state_dict)
@@ -42,7 +43,7 @@ class BaseModel(nn.Module):
 
 
 
-class GRU(nn.Module):
+class GRU(BaseModel, torch.nn.Module):
     def __init__(self, 
                  input_size=2, 
                  hidden_size=64, 
@@ -51,15 +52,17 @@ class GRU(nn.Module):
                  bidirectional=False, 
                  batch_first=True, 
                  model_name=""):
-        super().__init__()
+        
+        torch.nn.Module.__init__(self)
+        BaseModel.__init__(self, model_name=model_name)
+        
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.output_size = output_size
         self.bidirectional = bidirectional
         self.batch_first = batch_first
-        self.model_name = model_name
-        self.class_name = self.__class__.__name__
+        self.num_directions = 2 if bidirectional else 1
         
         self.gru = nn.GRU(input_size=self.input_size, 
                           hidden_size=self.hidden_size, 
@@ -67,53 +70,47 @@ class GRU(nn.Module):
                           batch_first=self.batch_first, 
                           bidirectional=self.bidirectional)
         
-        self.fc = nn.Linear(self.hidden_size, self.output_size)
+        self.fc = nn.Linear(in_features=hidden_size*self.num_directions, 
+                            out_features=self.output_size)
 
     @utils.complex_handler
     def forward(self, x, h_0=None):
+        batch_size = x.size(0)
         if h_0 is None:
             if x.dim() == 2:
-                h_0 = torch.zeros(self.num_layers, self.hidden_size)
+                h_0 = torch.zeros(self.num_directions * self.num_layers, 
+                                  self.hidden_size)
             else:
-                batch_size = x.size(0)
-                h_0 = torch.zeros(self.num_layers, batch_size, self.hidden_size)
+                h_0 = torch.zeros(self.num_directions * self.num_layers, 
+                                  batch_size, 
+                                  self.hidden_size)
         out, _ = self.gru(x, h_0)
         y = self.fc(out)
         return y
     
-    def count_params(self):
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
-
-    def save_weights(self, directory="model_params"):
-        os.makedirs(directory, exist_ok=True)
-        filename = (
-            f"{directory}/{self.model_name}_{self.class_name}_"
+    def _get_filename(self):
+        return (
+            f"{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
-            f"in{self.input_size}_out{self.output_size}_bi{self.bidirectional}.pt")
-        torch.save(self.state_dict(), filename)
-        print(f"Model weights saved to {filename}")
-
-    def load_weights(self, directory="model_params"):
-        filename = (
-            f"{directory}/{self.model_name}_{self.class_name}_"
-            f"hs{self.hidden_size}_nl{self.num_layers}_"
-            f"in{self.input_size}_out{self.output_size}_bi{self.bidirectional}.pt")
-        if os.path.isfile(filename):
-            state_dict = torch.load(filename)
-            self.load_state_dict(state_dict)
-            print(f"Model weights loaded from {filename}")
-            return True
-        else:
-            print(f"No saved weights found at {filename}, initializing new parameters.")
-            return False
+            f"in{self.input_size}_out{self.output_size}_bi{int(self.bidirectional)}.pt")
 
 
 
 
-class LSTM(nn.Module):
-    def __init__(self, input_size=2, hidden_size=64, num_layers=1, output_size=2, bidirectional=False, batch_first=True,
-                 bias=False, model_name=""):
-        super().__init__()
+class LSTM(BaseModel, torch.nn.Module):
+    def __init__(self, 
+                 input_size=2, 
+                 hidden_size=64, 
+                 num_layers=1, 
+                 output_size=2, 
+                 bidirectional=False, 
+                 batch_first=True,
+                 bias=False, 
+                 model_name=""):
+        
+        torch.nn.Module.__init__(self)
+        BaseModel.__init__(self, model_name=model_name)
+        
         self.hidden_size = hidden_size
         self.input_size = input_size
         self.output_size = output_size
@@ -122,8 +119,6 @@ class LSTM(nn.Module):
         self.batch_first = batch_first
         self.bias = bias
         self.num_directions = 2 if bidirectional else 1
-        self.model_name = model_name
-        self.class_name = self.__class__.__name__
 
         self.lstm = nn.LSTM(input_size=input_size,
                           hidden_size=hidden_size,
@@ -131,13 +126,7 @@ class LSTM(nn.Module):
                           bidirectional=self.bidirectional,
                           batch_first=self.batch_first,
                           bias=self.bias)
-        self.fc_1 = nn.Linear(in_features=hidden_size*self.num_directions,
-                                out_features=150,
-                                bias=self.bias)
-        self.fc_2 = nn.Linear(in_features=150,
-                                out_features=200,
-                                bias=self.bias)
-        self.fc_out = nn.Linear(in_features=200,
+        self.fc_out = nn.Linear(in_features=hidden_size*self.num_directions,
                                 out_features=self.output_size,
                                 bias=self.bias)
 
@@ -154,39 +143,14 @@ class LSTM(nn.Module):
                             self.hidden_size)
         
         y, (h_n, c_n) = self.lstm(x, (h_0, c_0))
-        y = self.fc_1(y)
-        y = self.fc_2(y)
         y = self.fc_out(y)
         return y
-
-    def count_params(self):
-            return sum(p.numel() for p in self.parameters() if p.requires_grad)
-
-    def save_weights(self, directory="model_params"):
-        os.makedirs(directory, exist_ok=True)
-        filename = (
-            f"{directory}/{self.model_name}_{self.class_name}_"
-            f"hs{self.hidden_size}_nl{self.num_layers}_"
-            f"in{self.input_size}_out{self.output_size}_bi{int(self.bidirectional)}.pt"
-        )
-        torch.save(self.state_dict(), filename)
-        print(f"Model weights saved to {filename}")
-
-    def load_weights(self, directory="model_params"):
-        filename = (
-            f"{directory}/{self.model_name}_{self.class_name}_"
+    
+    def _get_filename(self):
+        return (
+            f"{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
             f"in{self.input_size}_out{self.output_size}_bi{int(self.bidirectional)}.pt")
-        if os.path.isfile(filename):
-            state_dict = torch.load(filename)
-            self.load_state_dict(state_dict)
-            print(f"Model weights loaded from {filename}")
-            return True
-        else:
-            print(f"No saved weights found at {filename}, initializing new parameters.")
-            return False
-
-
 
 
 class CustomTCN(TCN):
@@ -653,6 +617,116 @@ class DenseNetRegressor(nn.Module):
 
 
 
+
+class PositionalEncoding(torch.nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        # x: (batch, seq_len, d_model)
+        seq_len = x.size(1)
+        return x + self.pe[:, :seq_len, :]
+
+
+class TransformerEncoderBlock(torch.nn.Module):
+    def __init__(self, d_model, nhead, d_ff):
+        super().__init__()
+        self.attn = torch.nn.MultiheadAttention(d_model, nhead, batch_first=True)
+        self.ln1 = torch.nn.LayerNorm(d_model)
+        
+        # FFN заменяем на две 1D-CNN с kernel=1
+        self.conv1 = torch.nn.Conv1d(d_model, d_ff, kernel_size=1)
+        self.conv2 = torch.nn.Conv1d(d_ff, d_model, kernel_size=1)
+        self.ln2 = torch.nn.LayerNorm(d_model)
+        
+        self.activation = torch.nn.Tanh()
+
+    def forward(self, x):
+        # x: (batch, seq_len, d_model)
+        attn_out, _ = self.attn(x, x, x)
+        x = x + attn_out
+        x = self.ln1(x)
+
+        # 1D-CNN: надо поменять размерность для Conv1d
+        x_cnn = x.transpose(1, 2)  # (batch, d_model, seq_len)
+        x_cnn = self.conv1(x_cnn)
+        x_cnn = self.activation(x_cnn)
+        x_cnn = self.conv2(x_cnn)
+        x_cnn = self.activation(x_cnn)
+        x_cnn = x_cnn.transpose(1, 2)  # (batch, seq_len, d_model)
+
+        x = self.ln2(x + x_cnn)        
+        return x
+
+
+class RTDTNN(BaseModel, torch.nn.Module):
+    def __init__(self, 
+                 d_in: int,
+                 d_model: int = 6, 
+                 n_heads: int = 2, 
+                 d_ff: int = 10, 
+                 n_fc: int = 8, 
+                 M: int = 5, 
+                 num_blocks: int = 1, 
+                 model_name: str = "model"):
+        
+        torch.nn.Module.__init__(self)
+        BaseModel.__init__(self, model_name=model_name)
+        
+        self.M = M
+        self.T = M + 1
+        self.d_in = d_in
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_ff = d_ff
+        self.n_fc = n_fc
+        self.num_blocks = num_blocks
+        
+        self.input_fc = torch.nn.Linear(d_in, d_model)
+        self.pos_encoder = PositionalEncoding(d_model)
+        
+        # Transformer Encoder
+        self.encoders = torch.nn.ModuleList(
+            [TransformerEncoderBlock(d_model, n_heads, d_ff) for _ in range(num_blocks)]
+        )
+        
+        self.fc = torch.nn.Linear(self.T * d_model, n_fc)
+        self.activation = torch.nn.Tanh()
+        
+        # Output layer (I/Q)
+        self.out = torch.nn.Linear(n_fc, 2)
+        
+
+    def forward(self, x):
+        # x: (batch, seq_len, d_in)
+        x = self.input_fc(x)                    # (batch, seq_len, d_model)
+        x = self.pos_encoder(x)                 # + positional encoding
+        for encoder in self.encoders:           # transformer encoder
+            x = encoder(x)
+        
+        x = x.reshape(x.size(0), -1)          # (batch, seq_len*d_model)
+        x = self.fc(x)
+        x = self.activation(x)                     # FC + tanh
+        x = self.out(x)                       # (batch, 2)
+        return x
+    
+    def _get_filename(self):
+        return (
+            f"{self.model_name}_{self.class_name}"
+            f"_din{self.d_in}_dmodel{self.d_model}_heads{self.n_heads}"
+            f"_dff{self.d_ff}_nfc{self.n_fc}_M{self.M}_blocks{self.num_blocks}.pt"
+            )
+
+
+
+
 class CustomLSTM(nn.Module):
     def __init__(self,
                  incoming,
@@ -855,480 +929,6 @@ class CustomLSTM(nn.Module):
             return hid_out
 
 
-# class BayesianLSTM(CustomLSTM):
-#     """
-#     config: L probabilistic weight with lognormal prior, N probabilistic weight with standart normal prior, 
-#            D deterministic learnable weight, 
-#            C constant weight (1 for multiplicative and 0 for additive weights)\
-           
-#            config[0]: W input_to_hidden, W hidden_to_hidden
-#                      L N D (C is not supported)
-#            config[1]: hat Z preactivation multiplicative weights
-#                      L N D C
-#            config[2]: Z input and hidden multiplicative weights
-#                      L N D C I R
-#     """
-#     def __init__(self, 
-#                  incoming, 
-#                  num_units,
-#                  log_sigma_in_init = -3.0, 
-#                  log_sigma_hid_init = -3.0,
-#                  ingate=None,
-#                  forgetgate=None,
-#                  cell=None,
-#                  outgate=None,
-#                  hid_init=0.0,
-#                  cell_init=0.0,
-#                  learn_init=True,
-#                  nonlinearity=torch.tanh,
-#                  backwards=False,
-#                  gradient_steps=-1,
-#                  thresh=3.0,
-#                  mask_input=None,
-#                  only_return_final=False,
-#                  hid_prop = False,
-#                  config="DCC"):
- 
-#         super().__init__(incoming, 
-#                          num_units, 
-#                          ingate, 
-#                          forgetgate, 
-#                          cell, 
-#                          outgate,
-#                          hid_init, 
-#                          cell_init, 
-#                          learn_init, 
-#                          nonlinearity, 
-#                          backwards, 
-#                          gradient_steps, 
-#                          mask_input,
-#                          only_return_final,
-#                          hid_prop)
-        
-#         self.reg = True
-#         self.config = config
-#         self.log_sigma_in_init = log_sigma_in_init
-#         self.log_sigma_hid_init = log_sigma_hid_init
-#         self.dtype = torch.float32
-
-#         if self.config[0] in {"L", "N"}:
-#             self.logsig_w_in = nn.Parameter(torch.full((4, incoming, num_units), log_sigma_in_init))
-#             self.logsig_w_hid = nn.Parameter(torch.full((4, num_units, num_units), log_sigma_hid_init))
-#         else:
-#             self.register_buffer("logsig_w_in", torch.zeros(4))
-#             self.register_buffer("logsig_w_hid", torch.zeros(4))
-        
-#         if self.config[2] in {"L", "N", "D", "I"}:
-#             self.mu_in = nn.Parameter(torch.ones(incoming))
-#         if self.config[2] in {"L", "N", "I"}:
-#             self.logsig_in = nn.Parameter(torch.full((incoming,), log_sigma_in_init))
-#         if self.config[2] in {"L", "N", "D", "R"}:
-#             self.mu_hid = nn.Parameter(torch.ones(num_units))
-#         if self.config[2] in {"L", "N", "R"}:
-#             self.logsig_hid = nn.Parameter(torch.full((num_units,), log_sigma_hid_init))
-
-#         if self.config[1] in {"L", "N", "D"}:
-#             self.mu_gates = nn.Parameter(torch.ones(4, num_units))
-#         if self.config[1] in {"L", "N"}:
-#             self.logsig_gates = nn.Parameter(torch.full((4, num_units), log_sigma_hid_init))
-
-#         self.input_noise = None
-#         self.hidden_noise = None
-#         self.input_clip = None
-#         self.hidden_clip = None
-
-#         self.thresh = thresh
-    
-#     def generate_noise_and_clip(self, num_batch, deterministic=False, clip=False):
-#         if not deterministic:
-#             if self.config[0] in {"L", "N"}:
-#                 self.input_w_noise = torch.randn(4, self.num_inputs, self.num_units, dtype=self.dtype) * torch.exp(self.logsig_w_in)
-#                 self.hidden_w_noise = torch.randn(4, self.num_units, self.num_units, dtype=self.dtype) * torch.exp(self.logsig_w_hid)
-#             else:
-#                 self.input_w_noise = torch.zeros(4)
-#                 self.hidden_w_noise = torch.zeros(4)
-
-#             if self.config[2] in {"L", "N"}:
-#                 self.input_noise = torch.randn(num_batch, self.num_inputs, dtype=self.dtype) * torch.exp(self.logsig_in) + self.mu_in
-#                 self.hidden_noise = torch.randn(num_batch, self.num_units, dtype=self.dtype) * torch.exp(self.logsig_hid) + self.mu_hid
-#             elif self.config[2] == "I":
-#                 self.input_noise = torch.randn(num_batch, self.num_inputs, dtype=self.dtype) * torch.exp(self.logsig_in) + self.mu_in
-#                 self.hidden_noise = torch.ones(1)
-#             elif self.config[2] == "R":
-#                 self.input_noise = torch.ones(1)
-#                 self.hidden_noise = torch.randn(num_batch, self.num_units, dtype=self.dtype) * torch.exp(self.logsig_hid) + self.mu_hid
-#             elif self.config[2] == "D":
-#                 self.input_noise = self.mu_in.detach()
-#                 self.hidden_noise = self.mu_hid.detach()
-#             else:
-#                 self.input_noise = torch.ones(1)
-#                 self.hidden_noise = torch.ones(1)
-        
-#             if self.config[1] in {"L", "N"}:
-#                 self.gates_noise = torch.randn(4, num_batch, self.num_units, dtype=self.dtype) * torch.exp(self.logsig_gates)[:, None, :] + self.mu_gates[:, None, :]
-#             elif self.config[1] == "D":
-#                 self.gates_noise = self.mu_gates.detach()
-#             else:
-#                 self.gates_noise = torch.ones(4)
-        
-#         else:
-#             self.input_w_noise = torch.zeros(4)
-#             self.hidden_w_noise = torch.zeros(4)
-
-#             if self.config[2] in {"L", "N", "D"}:
-#                 self.input_noise = self.mu_in.detach().to(dtype=self.dtype).unsqueeze(0).expand(num_batch, -1)
-#                 self.hidden_noise = self.mu_hid.detach().to(dtype=self.dtype).unsqueeze(0).expand(num_batch, -1)
-#             elif self.config[2] == "I":
-#                 self.input_noise = self.mu_in.detach().to(dtype=self.dtype).unsqueeze(0).expand(num_batch, -1)
-#                 self.hidden_noise = torch.ones(1)
-#             elif self.config[2] == "R":
-#                 self.input_noise = torch.ones(1)
-#                 self.hidden_noise = self.mu_hid.detach().to(dtype=self.dtype).unsqueeze(0).expand(num_batch, -1)
-#             else:
-#                 self.input_noise = torch.ones(1)
-#                 self.hidden_noise = torch.ones(1)
-
-#             if self.config[1] in {"L", "N", "D"}:
-#                 self.gates_noise = self.mu_gates.detach()
-#             else:
-#                 self.gates_noise = torch.ones(4, dtype=self.dtype)
-        
-#         self.input_noise = self.input_noise.unsqueeze(1)
-        
-#         if clip:
-#             if self.config[0] == "L":
-#                 W_in_cat = torch.cat([self.W_in_to_ingate[None,:,:],
-#                                     self.W_in_to_forgetgate[None,:,:],
-#                                     self.W_in_to_cell[None,:,:],
-#                                     self.W_in_to_outgate[None,:,:]], dim=0)
-#                 log_alpha_w_in = utils.clip_func(2 * self.logsig_w_in - utils.safe_torch_log(W_in_cat**2))
-#                 self.input_w_clip = (log_alpha_w_in <= self.thresh).to(dtype=self.dtype)
-
-#                 W_hid_cat = torch.cat([self.W_hid_to_ingate[None,:,:],
-#                                     self.W_hid_to_forgetgate[None,:,:],
-#                                     self.W_hid_to_cell[None,:,:],
-#                                     self.W_hid_to_outgate[None,:,:]], dim=0)
-#                 log_alpha_w_hid = utils.clip_func(2 * self.logsig_w_hid - utils.safe_torch_log(W_hid_cat**2))
-#                 self.hidden_w_clip = (log_alpha_w_hid <= self.thresh).to(dtype=self.dtype)
-#             else:
-#                 self.input_w_clip = torch.ones(4)
-#                 self.hidden_w_clip = torch.ones(4)
-
-#             if self.config[2] == "L":
-#                 log_alpha_in = utils.clip_func(2 * self.logsig_in - utils.safe_torch_log(self.mu_in**2))
-#                 self.input_clip = (log_alpha_in <= self.thresh).to(dtype=self.dtype)
-#                 log_alpha_hid = utils.clip_func(2 * self.logsig_hid - utils.safe_torch_log(self.mu_hid**2))
-#                 self.hidden_clip = (log_alpha_hid <= self.thresh).to(dtype=self.dtype)
-#             elif self.config[2] == "I":
-#                 log_alpha_in = utils.clip_func(2 * self.logsig_in - utils.safe_torch_log(self.mu_in**2))
-#                 self.input_clip = (log_alpha_in <= self.thresh).to(dtype=self.dtype)
-#                 self.hidden_clip = torch.ones(1)
-#             elif self.config[2] == "R":
-#                 self.input_clip = torch.ones(1)
-#                 log_alpha_hid = utils.clip_func(2 * self.logsig_hid - utils.safe_torch_log(self.mu_hid**2))
-#                 self.hidden_clip = (log_alpha_hid <= self.thresh).to(dtype=self.dtype)
-#             else:
-#                 self.input_clip = torch.ones(1)
-#                 self.hidden_clip = torch.ones(1)
-
-#             if self.config[1] == "L":
-#                 log_alpha_gates = utils.clip_func(2 * self.logsig_gates - utils.safe_torch_log(self.mu_gates**2))
-#                 self.gates_clip = (log_alpha_gates <= self.thresh).to(dtype=self.dtype)
-#             else:
-#                 self.gates_clip = torch.ones(4)
-        
-#         else:
-#             self.input_w_clip = torch.ones(4)
-#             self.hidden_w_clip = torch.ones(4)
-#             self.input_clip = torch.ones(1)
-#             self.hidden_clip = torch.ones(1)
-#             self.gates_clip = torch.ones(4)
-        
-#         self.W_hid = torch.cat([
-#             self.W_hid_to_ingate + self.hidden_w_noise[0],
-#             self.W_hid_to_forgetgate + self.hidden_w_noise[1],
-#             self.W_hid_to_cell + self.hidden_w_noise[2],
-#             self.W_hid_to_outgate + self.hidden_w_noise[3]
-#         ], dim=1)
-
-#         self.W_in = torch.cat([
-#             self.W_in_to_ingate + self.input_w_noise[0],
-#             self.W_in_to_forgetgate + self.input_w_noise[1],
-#             self.W_in_to_cell + self.input_w_noise[2],
-#             self.W_in_to_outgate + self.input_w_noise[3],
-#         ], dim=1)
-
-#         return
-    
-#     def eval_reg(self, train_size):
-#         W_in = torch.cat([
-#             self.W_in_to_ingate.unsqueeze(0),
-#             self.W_in_to_forgetgate.unsqueeze(0),
-#             self.W_in_to_cell.unsqueeze(0),
-#             self.W_in_to_outgate.unsqueeze(0)
-#         ], dim=0)
-
-#         if self.config[0] == "N":
-#             KL_element_in = -self.logsig_w_in + 0.5 * (torch.exp(2 * self.logsig_w_in) + W_in**2) - 0.5
-#             KL = KL_element_in.sum()
-#         elif self.config[0] == "L":
-#             log_alpha_w_in = utils.clip_func(2 * self.logsig_w_in - utils.safe_torch_log(W_in**2))
-#             KL = utils.alpha_regf(log_alpha_w_in).sum()
-#         else:
-#             KL = torch.zeros(1, dtype=self.dtype).sum()
-
-#         W_hid = torch.cat([
-#             self.W_hid_to_ingate.unsqueeze(0),
-#             self.W_hid_to_forgetgate.unsqueeze(0),
-#             self.W_hid_to_cell.unsqueeze(0),
-#             self.W_hid_to_outgate.unsqueeze(0)
-#         ], dim=0)
-
-#         if self.config[0] == "N":
-#             KL_element_hid = -self.logsig_w_hid + 0.5 * (torch.exp(2 * self.logsig_w_hid) + W_hid**2) - 0.5
-#             KL += KL_element_hid.sum()
-#         elif self.config[0] == "L":
-#             log_alpha_w_hid = utils.clip_func(2 * self.logsig_w_hid - utils.safe_torch_log(W_hid**2))
-#             KL += utils.alpha_regf(log_alpha_w_hid).sum()
-
-#         if self.config[2] in {"L", "R", "I"}:
-#             if self.config[2] in {"L", "R"}:
-#                 log_alpha_hid = utils.clip_func(2 * self.logsig_hid - utils.safe_torch_log(self.mu_hid**2))
-#                 KL += utils.alpha_regf(log_alpha_hid).sum()
-#             if self.config[2] in {"L", "I"}:
-#                 log_alpha_in = utils.clip_func(2 * self.logsig_in - utils.safe_torch_log(self.mu_in**2))
-#                 KL += utils.alpha_regf(log_alpha_in).sum()
-#         elif self.config[2] == "N":
-#             KL += (-self.logsig_hid + 0.5 * (torch.exp(2 * self.logsig_hid) + self.mu_hid**2) - 0.5).sum()
-#             KL += (-self.logsig_in + 0.5 * (torch.exp(2 * self.logsig_in) + self.mu_in**2) - 0.5).sum()
-
-#         if self.config[1] == "L":
-#             log_alpha_gates = utils.clip_func(2 * self.logsig_gates - utils.safe_torch_log(self.mu_gates**2))
-#             KL += utils.alpha_regf(log_alpha_gates).sum()
-#         elif self.config[1] == "N":
-#             KL_element = -self.logsig_gates + 0.5 * (torch.exp(2 * self.logsig_gates) + self.mu_gates**2) - 0.5
-#             KL += KL_element.sum()
-        
-#         reg = KL / train_size
-#         return reg
-    
-#     def get_ard(self):
-#         if self.config[0] == "L":
-#             W_in = torch.cat([
-#                 self.W_in_to_ingate.unsqueeze(0),
-#                 self.W_in_to_forgetgate.unsqueeze(0),
-#                 self.W_in_to_cell.unsqueeze(0),
-#                 self.W_in_to_outgate.unsqueeze(0)
-#             ], dim=0)
-#             log_alpha_w_in = 2 * self.logsig_w_in - 2 * utils.safe_torch_log(torch.abs(W_in))
-#             mask_w_in = log_alpha_w_in < self.thresh
-
-#             W_hid = torch.cat([
-#                 self.W_hid_to_ingate.unsqueeze(0),
-#                 self.W_hid_to_forgetgate.unsqueeze(0),
-#                 self.W_hid_to_cell.unsqueeze(0),
-#                 self.W_hid_to_outgate.unsqueeze(0)
-#             ], dim=0)
-#             log_alpha_w_hid = 2 * self.logsig_w_hid - 2 * utils.safe_torch_log(torch.abs(W_hid))
-#             mask_w_hid = log_alpha_w_hid < self.thresh
-#         else:
-#             mask_w_in = torch.ones((4,) + self.W_in_to_ingate.shape, dtype=torch.bool)
-#             mask_w_hid = torch.ones((4,) + self.W_hid_to_ingate.shape, dtype=torch.bool)
-
-#         mask_in = mask_w_in.any(dim=2).any(dim=0)
-#         mask_hid_by_w = mask_w_hid.any(dim=2).any(dim=0)
-#         mask_hid_by_z = torch.ones_like(mask_hid_by_w, dtype=torch.bool)
-        
-#         def log_alpha_calc(logsig, mu):
-#             return 2 * logsig - 2 * utils.safe_torch_log(torch.abs(mu))
-
-#         if self.config[2] == "L":
-#             log_alpha_hid = log_alpha_calc(self.logsig_hid, self.mu_hid)
-#             log_alpha_in = log_alpha_calc(self.logsig_in, self.mu_in)
-#             mask_in = torch.logical_and(log_alpha_in < self.thresh, mask_in)
-#             mask_hid_by_z = log_alpha_hid < self.thresh
-#         elif self.config[2] == "I":
-#             log_alpha_in = log_alpha_calc(self.logsig_in, self.mu_in)
-#             mask_in = torch.logical_and(log_alpha_in < self.thresh, mask_in)
-#         elif self.config[2] == "R":
-#             log_alpha_hid = log_alpha_calc(self.logsig_hid, self.mu_hid)
-#             mask_hid_by_z = log_alpha_hid < self.thresh
-
-#         # --- gates ---
-#         mask = torch.cat([mask_w_in, mask_w_hid], dim=1)
-#         if self.config[1] == "L":
-#             log_alpha_gates = log_alpha_calc(self.logsig_gates, self.mu_gates)
-#             mask_gates = torch.logical_and(log_alpha_gates < self.thresh, mask.any(dim=1))
-#         else:
-#             mask_gates = mask.any(dim=1)
-
-#         return {
-#             "w_input": mask_w_in,
-#             "w_hidden": mask_w_hid,
-#             "gates": mask_gates,
-#             "z_input": mask_in,
-#             "z_hidden_by_w": mask_hid_by_w,
-#             "z_hidden": mask_hid_by_z,
-#         }
-        
-#     def prepare_gates_noise(self, num_batch):
-#         dtype = self.dtype
-#         num_units = self.num_units
-
-#         if self.gates_noise is None:
-#             gates_noise = torch.ones((num_batch, 4, num_units), dtype=dtype)
-#         else:
-#             g = self.gates_noise
-#             if g.ndim == 1:
-#                 gates_noise = g.unsqueeze(0).unsqueeze(-1)
-#                 gates_noise = gates_noise.expand(num_batch, -1, num_units)
-#             elif g.ndim == 2:
-#                 gates_noise = g.unsqueeze(0).expand(num_batch, -1, -1)
-#             elif g.ndim == 3:
-#                 gates_noise = g.permute(1, 0, 2).to(dtype=dtype)
-#             else:
-#                 raise ValueError(f"Unexpected shape for gates_noise: {g.shape}")
-
-#         if self.gates_clip is None:
-#             gates_clip = torch.ones((1, 4, num_units), dtype=dtype)
-#         else:
-#             gc = self.gates_clip
-#             if gc.ndim == 0:
-#                 gates_clip = gc.expand(1, 4, num_units)
-#             elif gc.ndim == 1:
-#                 gates_clip = gc.unsqueeze(0).unsqueeze(-1).expand(1, -1, num_units)
-#             elif gc.ndim == 2:
-#                 gates_clip = gc.unsqueeze(0)
-#             else:
-#                 raise ValueError(f"Unexpected shape for gates_clip: {gc.shape}")
-
-#         gates_noise_clipped = gates_noise * gates_clip
-
-#         return (gates_noise_clipped[:, 0, :], 
-#                 gates_noise_clipped[:, 1, :], 
-#                 gates_noise_clipped[:, 2, :], 
-#                 gates_noise_clipped[:, 3, :])
-
-#     @utils.complex_handler
-#     def forward(self, inputs, hid_init=None, deterministic: bool = False, clip: bool = False):
-#         """
-#         inputs: либо тензор (batch, seq_len, input_dim) либо список/tuple:
-#                 inputs[0] - input tensor,
-#                 при self.mask_incoming_index > 0 mask ожидается в inputs[self.mask_incoming_index],
-#                 при self.hid_prop ожидается inputs[1] с hid_init и cell_init.
-#         Возвращает:
-#         - если self.only_return_final: (batch, num_units)
-#         - elif self.hid_prop: (2, batch, seq_len, num_units)
-#         - else: (batch, seq_len, num_units)
-#         """
-
-#         if isinstance(inputs, (list, tuple)):
-#             x = inputs[0]
-#         else:
-#             x = inputs
-
-#         mask = None
-#         if getattr(self, "mask_incoming_index", -1) > 0 and isinstance(inputs, (list, tuple)):
-#             if len(inputs) > self.mask_incoming_index:
-#                 mask = inputs[self.mask_incoming_index]
-        
-#         if mask is not None:
-#             if mask.ndim == 3:
-#                 mask_seq = mask
-#             else:
-#                 mask_seq = mask.unsqueeze(-1)
-#         else:
-#             mask_seq = None
-
-#         num_batch, seq_len, _ = x.shape
-#         hid_out = torch.empty((num_batch, seq_len, self.num_units), dtype=self.dtype)
-#         cell_out = torch.empty_like(hid_out)
- 
-#         self.generate_noise_and_clip(num_batch, deterministic, clip)
-
-#         self.input_w_clip = self.input_w_clip.view(1, 4, 1).expand(1, 4, self.num_units).reshape(1, 4 * self.num_units)
-#         self.hidden_w_clip = self.hidden_w_clip.view(4, 1).expand(4, self.num_units).reshape(1, 4 * self.num_units)
-
-#         g0_gc0, g1_gc1, g2_gc2, g3_gc3 = self.prepare_gates_noise(num_batch)
-        
-#         W_in_masked = self.W_in * self.input_w_clip
-        
-#         x_eff = x * self.input_noise * self.input_clip
-#         input_preact = torch.matmul(x_eff, W_in_masked)
-        
-#         input_i, input_f, input_c, input_o = torch.chunk(input_preact, 4, dim=-1)
-        
-#         input_i = input_i + self.b_ingate
-#         input_f = input_f + self.b_forgetgate
-#         input_c = input_c + self.b_cell
-#         input_o = input_o + self.b_outgate
-        
-#         # input_i = input_i * self.input_w_clip[0] + self.b_ingate
-#         # input_f = input_f * self.input_w_clip[1] + self.b_forgetgate
-#         # input_c = input_c * self.input_w_clip[2] + self.b_cell
-#         # input_o = input_o * self.input_w_clip[3] + self.b_outgate
-        
-#         if self.hid_prop and hid_init is not None:
-#             hid = hid_init[0].to(dtype=self.dtype)
-#             cell = hid_init[1].to(dtype=self.dtype)
-#         else:
-#             hid = torch.zeros(num_batch, self.num_units, dtype=self.dtype)
-#             cell = torch.zeros(num_batch, self.num_units, dtype=self.dtype)
-                
-#         hn = self.hidden_noise if self.hidden_noise is not None else torch.ones(1, dtype=self.dtype)
-#         hc = self.hidden_clip if self.hidden_clip is not None else torch.ones(1, dtype=self.dtype)
-#         hn_hc = hn * hc
-        
-#         t_range = range(seq_len - 1, -1, -1) if self.backwards else range(seq_len)
-
-#         for t in t_range:
-#             cell_prev = cell
-#             hid_prev = hid
-            
-#             input_n_i = input_i[:, t, :]
-#             input_n_f = input_f[:, t, :]
-#             input_n_c = input_c[:, t, :]
-#             input_n_o = input_o[:, t, :]
-            
-#             hid_preact = hid @ self.W_hid
-            
-#             hid_preact = hid_preact * self.hidden_w_clip
-#             hid_preact_i, hid_preact_f, hid_preact_c, hid_preact_o = torch.chunk(hid_preact, 4, dim=1)
-
-#             ingate = self.nonlinearity_ingate((input_n_i + hid_preact_i) * g0_gc0 + self.b_ingate)
-#             forgetgate = self.nonlinearity_forgetgate((input_n_f + hid_preact_f) * g1_gc1 + self.b_forgetgate)
-#             cell_candidate = self.nonlinearity_cell((input_n_c + hid_preact_c) * g2_gc2 + self.b_cell)
-            
-#             cell_new = forgetgate * cell_prev + ingate * cell_candidate
-#             outgate = self.nonlinearity_outgate((input_n_o + hid_preact_o) * g3_gc3 + self.b_outgate)
-#             hid_new = outgate * self.nonlinearity(cell_new)
-
-#             hid_new = hid_new * hn_hc
-
-#             if mask_seq is not None:
-#                 m = mask_seq[:, t, :]
-#                 if m.ndim == 2 and m.shape[1] == 1:
-#                     m = m.expand(-1, self.num_units)
-#                 cell = m * cell_new + (1.0 - m) * cell_prev
-#                 hid = m * hid_new + (1.0 - m) * hid_prev
-#             else:
-#                 cell = cell_new
-#                 hid = hid_new
-
-#             hid_out[:, t, :] = hid
-#             cell_out[:, t, :] = cell
-
-#         if self.only_return_final:
-#             return hid_out[:, -1, :]
-
-#         if self.backwards:
-#             hid_out = hid_out.flip(dims=[1])
-#             cell_out = cell_out.flip(dims=[1])
-
-#         if self.hid_prop:
-#             return torch.cat([hid_out.unsqueeze(0), cell_out.unsqueeze(0)], dim=0)
-#         else:
-#             return hid_out
 
 
 class Dense(nn.Module):

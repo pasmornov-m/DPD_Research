@@ -56,6 +56,9 @@ def safe_torch_log(x: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
 def clip_func(x: torch.Tensor, to: float = 8) -> torch.Tensor:
         return torch.clamp(x,  min=-float(to), max=float(to))
 
+def cut_array(M, *arrays):
+    return tuple(arr[M:] for arr in arrays)
+
 
 def complex_handler(forward_func):
     """Декоратор для автоматической обработки комплексных чисел в методах forward"""

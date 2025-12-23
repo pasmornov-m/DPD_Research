@@ -186,6 +186,7 @@ def net_inference(net, x, deterministic=None):
         return
     if is_complex:
         result = torch.squeeze(result)
-        result = utils.iq_to_complex(result)
+
+    result = utils.iq_to_complex(result)
         
     return result
