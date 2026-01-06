@@ -123,6 +123,8 @@ class SimplePipeline():
     def run_pa(self):
         print("Run PA")
         self.pa_model = self.base_model(**self.model_params, model_name="pa")
+        count_params = self.pa_model.count_params()
+        print(f"count_params: {count_params}")
         is_load = self.pa_model.load_weights()
         optimizer = self._build_optimizer(self.pa_model)
         scheduler = self._build_scheduler(optimizer)
@@ -143,8 +145,13 @@ class SimplePipeline():
             time_train = timedelta(seconds=round(elapsed))
             self.pa_model.save_weights()
         utils.freeze_pa_model(self.pa_model)
+        
+        if issubclass(self.base_model, RTDTNN):
+            x_val = data_loader.build_X_in(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props["P"])
+        else:
+            x_val = self.container.val_input
 
-        y_val_pa_model = learning.net_inference(net=self.pa_model, x=self.container.val_input)
+        y_val_pa_model = learning.net_inference(net=self.pa_model, x=x_val)
         pa_model_nmse = metrics.compute_nmse(y_val_pa_model, self.container.val_output)
         pa_model_acpr = metrics.calculate_acpr(y_val_pa_model, self.acpr_meter)
         print(f"[PA] NMSE: {pa_model_nmse:.2f}, ACPR: {pa_model_acpr}")
@@ -152,12 +159,15 @@ class SimplePipeline():
             "nmse": pa_model_nmse.item(),
             "acpr": pa_model_acpr,
             "y_val_pa_model": y_val_pa_model,
-            "time_train": time_train
+            "time_train": time_train,
+            "count_params": count_params
         }
     
     def run_dla(self):
         print("Run DLA")
         dpd_model = self.base_model(**self.model_params, model_name="dla")
+        count_params = dpd_model.count_params()
+        print(f"count_params: {count_params}")
         is_load = dpd_model.load_weights()
         casc_dla = utils.CascadeModel(model_1=dpd_model, 
                                         model_2=self.pa_model)
@@ -180,21 +190,29 @@ class SimplePipeline():
             time_train = timedelta(seconds=round(elapsed))
             dpd_model.save_weights()
         
-        y_val_dla = learning.net_inference(net=casc_dla, x=self.container.val_output)
+        if issubclass(self.base_model, RTDTNN):
+            x_val = data_loader.build_X_in(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props["P"])
+        else:
+            x_val = self.container.val_input
+        
+        y_val_dla = learning.net_inference(net=casc_dla, x=x_val)
         dla_nmse = metrics.compute_nmse(y_val_dla, self.container.val_output_target)
         dla_acpr = metrics.calculate_acpr(y_val_dla, self.acpr_meter)
-        print(f"[DLA] NMSE: {dla_nmse:.2f}, ACPR: {dla_acpr}")
+        print(f"[DLA] NMSE: {dla_nmse:.2f}, ACPR: {dla_acpr}, count_params: {count_params}")
 
         self.results["dla"] = {
             "nmse": dla_nmse.item(),
             "acpr": dla_acpr,
             "y_val_dla": y_val_dla,
-            "time_train": time_train
+            "time_train": time_train,
+            "count_params": count_params
         }
 
     def run_ila(self):
         print("Run ILA")
         dpd_model = self.base_model(**self.model_params, model_name="ila")
+        count_params = dpd_model.count_params()
+        print(f"count_params: {count_params}")
         is_load = dpd_model.load_weights()
         casc_ila_train = utils.CascadeModel(model_1=self.pa_model, model_2=dpd_model, gain=self.container.gain, cascade_type="ila")
         casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
@@ -217,16 +235,22 @@ class SimplePipeline():
             time_train = timedelta(seconds=round(elapsed))
             dpd_model.save_weights()
         
-        y_val_ila = learning.net_inference(net=casc_ila_eval, x=self.container.val_input)
+        if issubclass(self.base_model, RTDTNN):
+            x_val = data_loader.build_X_in(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props["P"])
+        else:
+            x_val = self.container.val_input
+        
+        y_val_ila = learning.net_inference(net=casc_ila_eval, x=x_val)
         ila_nmse = metrics.compute_nmse(y_val_ila, self.container.val_output_target)
         ila_acpr = metrics.calculate_acpr(y_val_ila, self.acpr_meter)
-        print(f"[ILA] NMSE: {ila_nmse:.2f}, ACPR: {ila_acpr}")
+        print(f"[ILA] NMSE: {ila_nmse:.2f}, ACPR: {ila_acpr}, count_params: {count_params}")
 
         self.results["ila"] = {
             "nmse": ila_nmse.item(),
             "acpr": ila_acpr,
             "y_val_ila": y_val_ila,
-            "time_train": time_train
+            "time_train": time_train,
+            "count_params": count_params
         }
     
     def _evaluate_ilc_signal(self):
@@ -234,9 +258,17 @@ class SimplePipeline():
         start = time.time()
         
         if self.container.ilc_train_output is None:
-            self.container.ilc_train_output = learning.ilc_signal(self.container.train_input, self.container.train_output_target, self.pa_model, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
+            self.container.ilc_train_output = learning.ilc_signal(self.container.train_input, 
+                                                                  self.container.train_output_target, 
+                                                                  self.pa_model, 
+                                                                  epochs=self.u_k_epochs, 
+                                                                  learning_rate=self.u_k_lr)
         if self.container.ilc_val_output is None:
-            self.container.ilc_val_output = learning.ilc_signal(self.container.val_input, self.container.val_output_target, self.pa_model, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
+            self.container.ilc_val_output = learning.ilc_signal(self.container.val_input, 
+                                                                self.container.val_output_target, 
+                                                                self.pa_model, 
+                                                                epochs=self.u_k_epochs, 
+                                                                learning_rate=self.u_k_lr)
             
         self.u_k_pa = self.pa_model.forward(self.container.ilc_train_output).detach()
         
@@ -259,6 +291,8 @@ class SimplePipeline():
         print("Run ILC")
 
         dpd_model = self.base_model(**self.model_params, model_name="ilc")
+        count_params = dpd_model.count_params()
+        print(f"count_params: {count_params}")
         is_load = dpd_model.load_weights()
         optimizer = self._build_optimizer(dpd_model)
         scheduler = self._build_scheduler(optimizer)
@@ -307,13 +341,14 @@ class SimplePipeline():
         y_val_ilc = learning.net_inference(net=casc_ilc_eval, x=x_val)
         ilc_nmse = metrics.compute_nmse(y_val_ilc, self.container.val_output_target)
         ilc_acpr = metrics.calculate_acpr(y_val_ilc, self.acpr_meter)
-        print(f"[ILC] NMSE: {ilc_nmse:.2f}, ACPR: {ilc_acpr}")
+        print(f"[ILC] NMSE: {ilc_nmse:.2f}, ACPR: {ilc_acpr}, count_params: {count_params}")
 
         self.results["ilc"] = {
             "nmse": ilc_nmse.item(),
             "acpr": ilc_acpr,
             "y_val_ilc": y_val_ilc,
-            "time_train": time_train
+            "time_train": time_train,
+            "count_params": count_params
         }
     
     def run(self):

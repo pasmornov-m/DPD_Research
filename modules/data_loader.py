@@ -45,14 +45,25 @@ class DataContainer:
         self.ilc_train_output = None
         self.ilc_val_output = None
         
+        self.input_signal_fs = None
+        self.bw_main_ch = None
+        self.nperseg = None
+        self.bw_sub_ch = None
+        self.n_sub_ch = None
+        self.sub_ch = None
+        
         self.gain = None
         
     def load_data(self, file_path: str):
         with open(f'{file_path}/spec.json') as json_file:
             config = json.load(json_file)
         
-        for key, value in config.items():
-            setattr(self, key, value)
+        self.input_signal_fs = config['input_signal_fs']
+        self.bw_main_ch = config['bw_main_ch']
+        self.nperseg = config['nperseg']
+        self.bw_sub_ch = config['bw_sub_ch']
+        self.n_sub_ch = config['n_sub_ch']
+        self.sub_ch = config['sub_ch']
             
         self.train_input = load_csv_to_tensor(f"{file_path}/train_input.csv")
         self.train_output = load_csv_to_tensor(f"{file_path}/train_output.csv")
@@ -199,12 +210,20 @@ def build_X_in(iq_signal: torch.Tensor, M: int = 5, P: int = 4) -> torch.Tensor:
     Returns:
         X: тензор формы (N-M, M+1, 2+P), dtype=torch.float32
     """
+    eps = 1e-8
 
     T = M + 1
 
-    I = iq_signal.real
-    Q = iq_signal.imag
-    amp = torch.abs(iq_signal)
+    if iq_signal.is_complex():
+        I = iq_signal.real
+        Q = iq_signal.imag
+        amp = torch.abs(iq_signal + eps)
+    elif len(iq_signal.shape) == 2 and iq_signal.shape[-1] == 2:
+        I = iq_signal[..., 0]
+        Q = iq_signal[..., 1]
+        amp = torch.sqrt(I**2 + Q**2) + eps
+    else:
+        raise ValueError(f"Unsupported iq_signal shape: {iq_signal.shape}")
 
     # Создаем тензор с окнами: shape = (N-M, T)
     I_windows = I.unfold(0, T, 1)       # (N-M, M+1)

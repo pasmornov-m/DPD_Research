@@ -175,7 +175,8 @@ class BatchGMP(nn.Module):
     
     @staticmethod
     def abs_complex(x: torch.Tensor) -> torch.Tensor:
-        return torch.sqrt(x[..., 0] ** 2 + x[..., 1] ** 2)
+        eps = 1e-8
+        return torch.sqrt(x[..., 0] ** 2 + x[..., 1] ** 2 + eps)
     
     @staticmethod
     def _to_complex(x: torch.Tensor) -> torch.Tensor:

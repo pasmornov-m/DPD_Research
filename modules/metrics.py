@@ -7,35 +7,35 @@ from modules.utils import to_torch_tensor, iq_to_complex, moving_average
 from typing import Tuple
 
 
-def compute_mse(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+def compute_mse(y_hat: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     """
     Вычисляет среднеквадратичную ошибку (MSE) между двумя сигналами.
     """
-    if torch.is_complex(x):
-        x = torch.view_as_real(x)
+    if torch.is_complex(y_hat):
+        y_hat = torch.view_as_real(y_hat)
     if torch.is_complex(y):
         y = torch.view_as_real(y)
 
-    if x.shape != y.shape:
-        raise ValueError(f"Формы входов не совпадают: x {x.shape}, y {y.shape}")
-    if x.shape[-1] != 2:
+    if y_hat.shape != y.shape:
+        raise ValueError(f"Формы входов не совпадают: y_hat {y_hat.shape}, y {y.shape}")
+    if y_hat.shape[-1] != 2:
         raise ValueError("Ожидается последний размер = 2 (I, Q)")
 
-    return F.mse_loss(x, y)
+    return F.mse_loss(y_hat, y)
 
 
-def compute_nmse(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    if torch.is_complex(x):
-        x = torch.view_as_real(x)
+def compute_nmse(y_hat: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    if torch.is_complex(y_hat):
+        y_hat = torch.view_as_real(y_hat)
     if torch.is_complex(y):
         y = torch.view_as_real(y)
         
-    if x.shape != y.shape:
-        raise ValueError(f"Формы входов не совпадают: x {x.shape}, y {y.shape}")
-    if x.shape[-1] != 2:
+    if y_hat.shape != y.shape:
+        raise ValueError(f"Формы входов не совпадают: y_hat {y_hat.shape}, y {y.shape}")
+    if y_hat.shape[-1] != 2:
         raise ValueError("Ожидается последний размер = 2 (I, Q)")
     
-    mse = F.mse_loss(x, y)
+    mse = F.mse_loss(y_hat, y)
     energy = (y ** 2).mean()
     if energy == 0:
         raise ZeroDivisionError("Energy of the ground truth is zero.")

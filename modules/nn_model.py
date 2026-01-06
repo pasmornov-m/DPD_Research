@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import numpy as np
 import os
-from modules import utils
+from modules import utils, data_loader
 from pytorch_tcn import TCN
 
 
@@ -666,6 +666,8 @@ class TransformerEncoderBlock(torch.nn.Module):
         return x
 
 
+
+
 class RTDTNN(BaseModel, torch.nn.Module):
     def __init__(self, 
                  d_in: int,
@@ -689,10 +691,12 @@ class RTDTNN(BaseModel, torch.nn.Module):
         self.n_fc = n_fc
         self.num_blocks = num_blocks
         
-        self.input_fc = torch.nn.Linear(d_in, d_model)
-        self.pos_encoder = PositionalEncoding(d_model)
+        self.in_norm = nn.LayerNorm(d_in)
         
-        # Transformer Encoder
+        self.input_fc = torch.nn.Linear(d_in, d_model)
+        # self.pos_encoder = PositionalEncoding(d_model)
+        # self.pos_bias = nn.Parameter(torch.zeros(1, self.T, d_model))
+        
         self.encoders = torch.nn.ModuleList(
             [TransformerEncoderBlock(d_model, n_heads, d_ff) for _ in range(num_blocks)]
         )
@@ -700,14 +704,18 @@ class RTDTNN(BaseModel, torch.nn.Module):
         self.fc = torch.nn.Linear(self.T * d_model, n_fc)
         self.activation = torch.nn.Tanh()
         
-        # Output layer (I/Q)
         self.out = torch.nn.Linear(n_fc, 2)
         
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
 
+        
     def forward(self, x):
         # x: (batch, seq_len, d_in)
         x = self.input_fc(x)                    # (batch, seq_len, d_model)
-        x = self.pos_encoder(x)                 # + positional encoding
+        # x = self.pos_encoder(x)                 # + positional encoding
+        # x = x + self.pos_bias
+
         for encoder in self.encoders:           # transformer encoder
             x = encoder(x)
         

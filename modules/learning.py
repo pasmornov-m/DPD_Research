@@ -1,8 +1,8 @@
 import torch
 from torch import nn
 from modules import metrics, utils
-# import time
-# from datetime import timedelta
+
+
 
 
 @utils.timer_decorator
@@ -89,9 +89,9 @@ def train(net,
         
         if epoch % 1 == 0 or epoch == n_epochs - 1:
             if scheduler:
-                print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}, lr: {scheduler.get_last_lr()[0]}")
+                print(f"Epoch {epoch:04d} — train_loss: {train_loss:.8f}, val_loss: {val_loss:.8f}, val_NMSE: {val_metric_loss:.2f}, lr: {scheduler.get_last_lr()[0]}")
             else:
-                print(f"Epoch {epoch:04d} — train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, val_NMSE: {val_metric_loss:.2f}")
+                print(f"Epoch {epoch:04d} — train_loss: {train_loss:.8f}, val_loss: {val_loss:.8f}, val_NMSE: {val_metric_loss:.2f}")
 
     print("===Training complete===")
     

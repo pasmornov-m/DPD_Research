@@ -1,7 +1,7 @@
 from dataclasses import dataclass, asdict
 from typing import Optional, Callable, Tuple, Dict, Type, Any
 import torch
-from modules.nn_model import GRU, LSTM, DenseNetRegressor, TCN, DiffESN, RTDTNN
+from modules.nn_model import GRU, LSTM, DenseNetRegressor, CustomTCN, DiffESN, RTDTNN
 from modules.gmp_model import ClassicGMP, BatchGMP
 
 
@@ -133,7 +133,7 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
         "blocks": tp["blocks"],
     },
 
-    TCN: lambda tp: {
+    CustomTCN: lambda tp: {
         "num_channels": tp["num_channels"],
         "kernel_size": tp["kernel_size"],
         "dropout": tp["dropout"],
