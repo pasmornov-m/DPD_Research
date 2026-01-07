@@ -72,7 +72,7 @@ def train(net,
           n_epochs,
           metric_criterion,
           scheduler=None,
-          grad_clip_val=0):
+          grad_clip_val=1.0):
     print("===Start training===")
     for epoch in range(n_epochs):
         net, train_loss = net_train(net=net,

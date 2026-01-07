@@ -39,10 +39,37 @@ def freeze_pa_model(model):
     for param in model.parameters():
         param.requires_grad = False
 
-def alpha_regf(a: torch.Tensor) -> torch.Tensor:
-    return 0.5 * torch.log1p(torch.exp(-a)) - (
-        0.03 + 1.0 / (1.0 + torch.exp(-(1.5 * (a + 1.3)))) * 0.64
-    )
+# def alpha_regf(a: torch.Tensor) -> torch.Tensor:
+#     return 0.5 * torch.log1p(torch.exp(-a)) - (
+#         0.03 + 1.0 / (1.0 + torch.exp(-(1.5 * (a + 1.3)))) * 0.64
+#     )
+
+def alpha_regf(log_alpha: torch.Tensor) -> torch.Tensor:
+    """
+    Аппроксимация KL-дивергенции для log-uniform prior.
+    
+    Из статьи: "Variational Dropout Sparsifies Deep Neural Networks"
+    Molchanov et al., 2017
+    
+    KL(q(w)||p(w)) ≈ k1 * σ(k2 + k3 * log_α) - 0.5 * log(1 + e^(-log_α)) - k1
+    
+    где k1 = 0.63576, k2 = 1.8732, k3 = 1.48695
+    
+    ВАЖНО: Это возвращает -KL (отрицательный KL), поэтому нужен минус!
+    """
+    k1 = 0.63576
+    k2 = 1.8732
+    k3 = 1.48695
+    
+    # Формула из статьи даёт -KL
+    negative_kl = k1 * torch.sigmoid(k2 + k3 * log_alpha) - \
+                  0.5 * torch.log1p(torch.exp(-log_alpha)) - k1
+    
+    # Возвращаем положительный KL
+    kl = -negative_kl
+    
+    # Дополнительная защита: KL ≥ 0 по определению
+    return torch.clamp(kl, min=0.0)
 
 def hard_sigmoid(x: torch.Tensor) -> torch.Tensor:
     return torch.clamp(0.2 * x + 0.5, min=0.0, max=1.0)
