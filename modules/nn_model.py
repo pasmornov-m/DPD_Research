@@ -968,121 +968,16 @@ class Dense(nn.Module):
         return out
 
 
-# class BayesianDense(Dense):
-#     def __init__(self, 
-#                  incoming, 
-#                  num_units, 
-#                  log_sigma_init = -3.0,
-#                  thresh=3.0,
-#                  W_initializer=None, 
-#                  b_init=0.0, 
-#                  nonlinearity=lambda x: x):
-#         super().__init__(incoming, num_units, nonlinearity)
-
-#         if isinstance(incoming, int):
-#             self.num_inputs = int(incoming)
-#         else:
-#             try:
-#                 self.num_inputs = int(incoming[-1])
-#             except Exception:
-#                 raise ValueError("incoming must be int or shape-like")
-
-#         self.num_units = int(num_units)
-#         self.nonlinearity = nonlinearity
-#         self.thresh = thresh
-#         self.dtype = torch.float32
-
-#         self.W = nn.Parameter(torch.empty(self.num_inputs, self.num_units, dtype=self.dtype))
-#         self.b = nn.Parameter(torch.full((self.num_units,), float(b_init), dtype=self.dtype))
-#         self.logsig = nn.Parameter(torch.full((self.num_inputs, self.num_units), float(log_sigma_init), dtype=self.dtype))
-
-#         if W_initializer is None:
-#             nn.init.xavier_uniform_(self.W)
-#         else:
-#             W_initializer(self.W)
-
-#     def pre_activation(self, input: torch.Tensor, deterministic: bool = False, clip: bool = False):
-#         """
-#         input: либо 2D (batch, input_dim) либо 3D (batch, seq_len, input_dim)
-#         Возвращает: mu + шум*si (или только mu в deterministic режиме)
-#         """
-#         W_eff = self.W
-#         sigma2 = torch.exp(2.0 * self.logsig)
-
-#         if clip:
-#             log_alpha = utils.clip_func(2.0 * self.logsig - utils.safe_torch_log(W_eff.pow(2)))
-#             clip_mask = log_alpha.ge(self.thresh)
-#             W_eff = torch.where(clip_mask, torch.zeros_like(W_eff), W_eff)
-#             sigma2 = torch.where(clip_mask, torch.zeros_like(sigma2), sigma2)
-
-#         if deterministic:
-#             return input @ W_eff
-        
-#         mu = input @ W_eff
-#         si = torch.sqrt((input * input) @ sigma2 + 1e-8)
-
-#         if input.ndim == 2:
-#             noise = torch.randn_like(mu)
-#         else:
-#             noise = torch.randn((mu.shape[0], 1, mu.shape[2]))
-
-#         return mu + noise * si
-
-#     def eval_reg(self, train_size: float):
-#         """
-#         alpha regularization: utils.alpha_regf(clip_func(2*logsig - log(W^2))).sum() / train_size
-#         Возвращаем torch scalar
-#         """
-#         log_alpha = utils.clip_func(2.0 * self.logsig - utils.safe_torch_log(self.W.pow(2)))
-#         reg = utils.alpha_regf(log_alpha).sum() / float(train_size)
-#         return reg
-
-#     def get_ard(self) -> dict[str, torch.Tensor]:
-#         """
-#         Возвращаем torch-маску (bool tensor).
-#         Маска не требует градиентов и используется для sparsification.
-#         """
-#         W = self.W.detach()
-#         logsig = self.logsig.detach()
-#         log_alpha = 2.0 * logsig - 2.0 * utils.safe_torch_log(torch.abs(W))
-#         mask = (log_alpha < self.thresh)
-
-#         return {"w": mask}
-    
-#     def forward(self, input: torch.Tensor, deterministic: bool = False, clip: bool = False, **kwargs):
-#         """
-#         input: tensor with last dim == num_inputs, can be 2D (batch, in) or 3D (batch, seq_len, in)
-#         deterministic, clip: передаются в pre_activation и управляют режимом
-#         Возвращает: nonlinearity( pre_activation(input, deterministic, clip) + b )
-#         """
-#         out = self.pre_activation(input, deterministic=deterministic, clip=clip)
-#         out = out + self.b
-#         return self.nonlinearity(out)
-
-
-class BayesianDense(nn.Module):
-    """
-    Dense layer with Sparse Variational Dropout.
-    
-    Использует Local Reparameterization Trick:
-    Вместо сэмплирования весов W = μ + σ·ε и вычисления y = x·W,
-    напрямую сэмплируем активации: y = x·μ + √(x²·σ²)·ε
-        
-    Параметры:
-        μ (self.mu_w): среднее весов, shape (in, out)
-        log σ (self.logsig_w): логарифм стд. отклонения, shape (in, out)
-        b: bias, shape (out,)
-    """
-    
+class BayesianDense(Dense):
     def __init__(self, 
                  incoming, 
                  num_units, 
-                 log_sigma_init: float = -3.0,
-                 thresh: float = 3.0,
+                 log_sigma_init = -3.0,
+                 thresh=3.0,
                  W_initializer=None, 
-                 b_init: float = 0.0, 
-                 nonlinearity=None):
-        super().__init__()
+                 b_init=0.0, 
+                 nonlinearity=lambda x: x):
+        super().__init__(incoming, num_units, nonlinearity)
 
         if isinstance(incoming, int):
             self.num_inputs = int(incoming)
@@ -1093,114 +988,219 @@ class BayesianDense(nn.Module):
                 raise ValueError("incoming must be int or shape-like")
 
         self.num_units = int(num_units)
-        self.nonlinearity = nonlinearity if nonlinearity is not None else (lambda x: x)
-        self.thresh = float(thresh)
-        self.log_sigma_init = float(log_sigma_init)
+        self.nonlinearity = nonlinearity
+        self.thresh = thresh
         self.dtype = torch.float32
-        
-        self.mu_w = nn.Parameter(torch.empty(self.num_inputs, self.num_units, dtype=self.dtype))
-        self.logsig_w = nn.Parameter(torch.full((self.num_inputs, self.num_units), log_sigma_init, dtype=self.dtype))
+
+        self.W = nn.Parameter(torch.empty(self.num_inputs, self.num_units, dtype=self.dtype))
         self.b = nn.Parameter(torch.full((self.num_units,), float(b_init), dtype=self.dtype))
+        self.logsig = nn.Parameter(torch.full((self.num_inputs, self.num_units), float(log_sigma_init), dtype=self.dtype))
 
         if W_initializer is None:
-            nn.init.xavier_uniform_(self.mu_w)
+            nn.init.xavier_uniform_(self.W)
         else:
-            W_initializer(self.mu_w)
-    
-    def _compute_log_alpha(self, logsig, mu):
-        """
-        log α = log(σ²/μ²) = 2·logsig - 2·log|μ|
-        """
-        log_alpha = 2.0 * logsig - 2.0 * utils.safe_torch_log(mu)
-        return utils.clip_func(log_alpha)
+            W_initializer(self.W)
 
-    def forward(self, 
-                input: torch.Tensor, 
-                deterministic: bool = False, 
-                clip: bool = False, 
-                **kwargs):
+    def pre_activation(self, input: torch.Tensor, deterministic: bool = False, clip: bool = False):
         """
-        Forward pass с Local Reparameterization Trick.
-        
-        Args:
-            input: (batch, in) или (batch, seq_len, in)
-            deterministic: если True, используем только μ
-            clip: если True, обнуляем "мёртвые" веса
-            
-        Returns:
-            output: nonlinearity(pre_activation + bias)
+        input: либо 2D (batch, input_dim) либо 3D (batch, seq_len, input_dim)
+        Возвращает: mu + шум*si (или только mu в deterministic режиме)
         """
-        
-        device = input.device
-        mu_w = self.mu_w
+        W_eff = self.W
+        sigma2 = torch.exp(2.0 * self.logsig)
 
         if clip:
-            log_alpha = self._compute_log_alpha(self.logsig_w, mu_w)
-            dead_mask = log_alpha >= self.thresh
-            mu_w = torch.where(dead_mask, torch.zeros_like(mu_w), mu_w)
-            sigma2 = torch.where(
-                dead_mask, 
-                torch.zeros_like(self.logsig_w), 
-                torch.exp(2.0 * self.logsig_w)
-            )
-        else:
-            sigma2 = torch.exp(2.0 * self.logsig_w)
-        
-        # Local Reparameterization Trick
-        # y = x·μ + √(x²·σ²)·ε
-        
-        mu_activation = input @ mu_w
-        
+            log_alpha = utils.clip_func(2.0 * self.logsig - utils.safe_torch_log(W_eff.pow(2)))
+            clip_mask = log_alpha.ge(self.thresh)
+            W_eff = torch.where(clip_mask, torch.zeros_like(W_eff), W_eff)
+            sigma2 = torch.where(clip_mask, torch.zeros_like(sigma2), sigma2)
+
         if deterministic:
-            pre_activation = mu_activation
+            return input @ W_eff
+        
+        mu = input @ W_eff
+        si = torch.sqrt((input * input) @ sigma2 + 1e-8)
+
+        if input.ndim == 2:
+            noise = torch.randn_like(mu)
         else:
-            var_activation = (input * input) @ sigma2
-            
-            std_activation = torch.sqrt(var_activation)
-            
-            if input.ndim == 2:
-                noise = torch.randn_like(mu_activation)
-            else:
-                noise = torch.randn(
-                    (input.shape[0], 1, self.num_units), 
-                    device=device, 
-                    dtype=self.dtype
-                )
-            
-            # y = μ + σ·ε
-            pre_activation = mu_activation + std_activation * noise
-        
-        output = self.nonlinearity(pre_activation + self.b)
-        
-        return output
+            noise = torch.randn((mu.shape[0], 1, mu.shape[2]))
 
-    def eval_reg(self, train_size: int):
-        """
-        KL divergence regularization для ELBO.
-        
-        Returns:
-            KL / train_size
-        """
-        
-        log_alpha = self._compute_log_alpha(self.logsig_w, self.mu_w)
-        kl = utils.alpha_regf(log_alpha).sum()
-        
-        return kl / float(train_size)
+        return mu + noise * si
 
-    def get_ard(self) -> dict:
+    def eval_reg(self, train_size: float):
         """
-        Получение ARD масок.
-        
-        Returns:
-            dict с маской "w": True = вес активен, False = можно отбросить
+        alpha regularization: utils.alpha_regf(clip_func(2*logsig - log(W^2))).sum() / train_size
+        Возвращаем torch scalar
         """
-        
-        with torch.no_grad():
-            log_alpha = self._compute_log_alpha(self.logsig_w, self.mu_w)
-            # True = активный вес (log_alpha < thresh)
-            mask = log_alpha < self.thresh
-        
+        log_alpha = utils.clip_func(2.0 * self.logsig - utils.safe_torch_log(self.W.pow(2)))
+        reg = utils.alpha_regf(log_alpha).sum() / float(train_size)
+        return reg
+
+    def get_ard(self) -> dict[str, torch.Tensor]:
+        """
+        Возвращаем torch-маску (bool tensor).
+        Маска не требует градиентов и используется для sparsification.
+        """
+        W = self.W.detach()
+        logsig = self.logsig.detach()
+        log_alpha = 2.0 * logsig - 2.0 * utils.safe_torch_log(torch.abs(W))
+        mask = (log_alpha < self.thresh)
+
         return {"w": mask}
+    
+    def forward(self, input: torch.Tensor, deterministic: bool = False, clip: bool = False, **kwargs):
+        """
+        input: tensor with last dim == num_inputs, can be 2D (batch, in) or 3D (batch, seq_len, in)
+        deterministic, clip: передаются в pre_activation и управляют режимом
+        Возвращает: nonlinearity( pre_activation(input, deterministic, clip) + b )
+        """
+        out = self.pre_activation(input, deterministic=deterministic, clip=clip)
+        out = out + self.b
+        return self.nonlinearity(out)
+
+
+# class BayesianDense(nn.Module):
+#     """
+#     Dense layer with Sparse Variational Dropout.
+    
+#     Использует Local Reparameterization Trick:
+#     Вместо сэмплирования весов W = μ + σ·ε и вычисления y = x·W,
+#     напрямую сэмплируем активации: y = x·μ + √(x²·σ²)·ε
+        
+#     Параметры:
+#         μ (self.mu_w): среднее весов, shape (in, out)
+#         log σ (self.logsig_w): логарифм стд. отклонения, shape (in, out)
+#         b: bias, shape (out,)
+#     """
+    
+#     def __init__(self, 
+#                  incoming, 
+#                  num_units, 
+#                  log_sigma_init: float = -3.0,
+#                  thresh: float = 3.0,
+#                  W_initializer=None, 
+#                  b_init: float = 0.0, 
+#                  nonlinearity=None):
+#         super().__init__()
+
+#         if isinstance(incoming, int):
+#             self.num_inputs = int(incoming)
+#         else:
+#             try:
+#                 self.num_inputs = int(incoming[-1])
+#             except Exception:
+#                 raise ValueError("incoming must be int or shape-like")
+
+#         self.num_units = int(num_units)
+#         self.nonlinearity = nonlinearity if nonlinearity is not None else (lambda x: x)
+#         self.thresh = float(thresh)
+#         self.log_sigma_init = float(log_sigma_init)
+#         self.dtype = torch.float32
+        
+#         self.mu_w = nn.Parameter(torch.randn(self.num_inputs, self.num_units, dtype=self.dtype) * 1e-3)
+#         self.logsig_w = nn.Parameter(torch.full((self.num_inputs, self.num_units), log_sigma_init, dtype=self.dtype))
+#         self.b = nn.Parameter(torch.full((self.num_units,), float(b_init), dtype=self.dtype))
+
+#         if W_initializer is None:
+#             nn.init.xavier_uniform_(self.mu_w)
+#         else:
+#             W_initializer(self.mu_w)
+    
+#     def _compute_log_alpha(self, logsig, mu):
+#         """
+#         log α = log(σ²/μ²) = 2·logsig - 2·log|μ|
+#         """
+#         log_alpha = 2.0 * logsig - 2.0 * utils.safe_torch_log(mu)
+#         return utils.clip_func(log_alpha)
+
+#     def forward(self, 
+#                 input: torch.Tensor, 
+#                 deterministic: bool = False, 
+#                 clip: bool = False, 
+#                 **kwargs):
+#         """
+#         Forward pass с Local Reparameterization Trick.
+        
+#         Args:
+#             input: (batch, in) или (batch, seq_len, in)
+#             deterministic: если True, используем только μ
+#             clip: если True, обнуляем "мёртвые" веса
+            
+#         Returns:
+#             output: nonlinearity(pre_activation + bias)
+#         """
+        
+#         device = input.device
+#         mu_w = self.mu_w
+
+#         if clip:
+#             log_alpha = self._compute_log_alpha(self.logsig_w, mu_w)
+#             dead_mask = log_alpha >= self.thresh
+#             mu_w = torch.where(dead_mask, torch.zeros_like(mu_w), mu_w)
+#             sigma2 = torch.where(
+#                 dead_mask, 
+#                 torch.zeros_like(self.logsig_w), 
+#                 torch.exp(2.0 * self.logsig_w)
+#             )
+#         else:
+#             sigma2 = torch.exp(2.0 * self.logsig_w)
+        
+#         # Local Reparameterization Trick
+#         # y = x·μ + √(x²·σ²)·ε
+        
+#         mu_activation = input @ mu_w
+        
+#         if deterministic:
+#             pre_activation = mu_activation
+#         else:
+#             var_activation = (input * input) @ sigma2
+            
+#             std_activation = torch.sqrt(var_activation)
+            
+#             if input.ndim == 2:
+#                 noise = torch.randn_like(mu_activation)
+#             else:
+#                 noise = torch.randn(
+#                     (input.shape[0], 1, self.num_units), 
+#                     device=device, 
+#                     dtype=self.dtype
+#                 )
+            
+#             # y = μ + σ·ε
+#             pre_activation = mu_activation + std_activation * noise
+        
+#         output = self.nonlinearity(pre_activation + self.b)
+        
+#         return output
+
+#     def eval_reg(self, train_size: int):
+#         """
+#         KL divergence regularization для ELBO.
+        
+#         Returns:
+#             KL / train_size
+#         """
+        
+#         log_alpha = self._compute_log_alpha(self.logsig_w, self.mu_w)
+#         kl = utils.alpha_regf(log_alpha).sum()
+        
+#         return kl / float(train_size)
+
+#     def get_ard(self) -> dict:
+#         """
+#         Получение ARD масок.
+        
+#         Returns:
+#             dict с маской "w": True = вес активен, False = можно отбросить
+#         """
+        
+#         with torch.no_grad():
+#             log_alpha = self._compute_log_alpha(self.logsig_w, self.mu_w)
+#             # True = активный вес (log_alpha < thresh)
+#             mask = log_alpha < self.thresh
+        
+#         return {"w": mask}
 
 
 

@@ -166,7 +166,7 @@ class ModelTrainer:
         return avg_loss, avg_metric_loss
 
 
-def net_inference(net, x, deterministic=None):
+def net_inference(net, x, deterministic=None, clip=False):
     is_complex = x.is_complex()
 
     if is_complex:
@@ -178,7 +178,7 @@ def net_inference(net, x, deterministic=None):
     net = net.eval()
     with torch.no_grad():
         if deterministic:
-            result = net(x, deterministic=deterministic)
+            result = net(x, deterministic=deterministic, clip=clip)
         else:
             result = net(x)
     
