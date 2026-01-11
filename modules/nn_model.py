@@ -613,7 +613,7 @@ class DenseNetRegressor(nn.Module):
             return True
         else:
             print(f"No saved weights found at {filename}, initializing new parameters.")
-            return 
+            return
 
 
 
@@ -630,7 +630,6 @@ class PositionalEncoding(torch.nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        # x: (batch, seq_len, d_model)
         seq_len = x.size(1)
         return x + self.pe[:, :seq_len, :]
 
@@ -640,32 +639,27 @@ class TransformerEncoderBlock(torch.nn.Module):
         super().__init__()
         self.attn = torch.nn.MultiheadAttention(d_model, nhead, batch_first=True)
         self.ln1 = torch.nn.LayerNorm(d_model)
-        
-        # FFN заменяем на две 1D-CNN с kernel=1
+
         self.conv1 = torch.nn.Conv1d(d_model, d_ff, kernel_size=1)
         self.conv2 = torch.nn.Conv1d(d_ff, d_model, kernel_size=1)
         self.ln2 = torch.nn.LayerNorm(d_model)
-        
+
         self.activation = torch.nn.Tanh()
 
     def forward(self, x):
-        # x: (batch, seq_len, d_model)
         attn_out, _ = self.attn(x, x, x)
         x = x + attn_out
         x = self.ln1(x)
 
-        # 1D-CNN: надо поменять размерность для Conv1d
-        x_cnn = x.transpose(1, 2)  # (batch, d_model, seq_len)
+        x_cnn = x.transpose(1, 2)
         x_cnn = self.conv1(x_cnn)
         x_cnn = self.activation(x_cnn)
         x_cnn = self.conv2(x_cnn)
         x_cnn = self.activation(x_cnn)
-        x_cnn = x_cnn.transpose(1, 2)  # (batch, seq_len, d_model)
+        x_cnn = x_cnn.transpose(1, 2)
 
-        x = self.ln2(x + x_cnn)        
+        x = self.ln2(x + x_cnn)
         return x
-
-
 
 
 class RTDTNN(BaseModel, torch.nn.Module):
@@ -709,18 +703,17 @@ class RTDTNN(BaseModel, torch.nn.Module):
 
         
     def forward(self, x):
-        # x: (batch, seq_len, d_in)
-        x = self.input_fc(x)                    # (batch, seq_len, d_model)
+        x = self.input_fc(x)
 
-        for encoder in self.encoders:           # transformer encoder
+        for encoder in self.encoders:
             x = encoder(x)
         
-        x = x.reshape(x.size(0), -1)          # (batch, seq_len*d_model)
+        x = x.reshape(x.size(0), -1)
         x = self.fc(x)
-        x = self.activation(x)                     # FC + tanh
-        x = self.out(x)                       # (batch, 2)
+        x = self.activation(x)
+        x = self.out(x)
         return x
-    
+
     def _get_filename(self):
         return (
             f"{self.model_name}_{self.class_name}"
@@ -730,555 +723,3 @@ class RTDTNN(BaseModel, torch.nn.Module):
 
 
 
-
-class CustomLSTM(nn.Module):
-    def __init__(self,
-                 incoming,
-                 num_units,
-                 ingate=None,
-                 forgetgate=None,
-                 cell=None,
-                 outgate=None,
-                 hid_init=0.0,
-                 cell_init=0.0,
-                 learn_init=True,
-                 nonlinearity=torch.tanh,
-                 backwards=False,
-                 gradient_steps=-1,
-                 mask_input=None,
-                 only_return_final=False,
-                 hid_prop=False):
-        
-        incoming = incoming if hid_prop else [incoming]
-        self.mask_incoming_index = -1
-        if mask_input is not None:
-            incoming.append(mask_input)
-            self.mask_incoming_index = len(incoming)-1
-        super().__init__()
-
-        self.nonlinearity = nonlinearity
-        self.num_units = num_units
-        
-        if isinstance(incoming, int):
-            self.incoming = incoming
-        elif isinstance(incoming, (tuple, list)):
-            self.incoming = int(np.prod(incoming[2:])) if len(incoming) > 2 else incoming[-1]
-        else:
-            raise ValueError("incoming must be int or shape-like (tuple/list)")
-        
-        self.backwards = backwards
-        self.gradient_steps = gradient_steps
-        self.only_return_final = only_return_final
-        self.hidden_noise = torch.ones(1, dtype=torch.float32)
-        self.hidden_clip = torch.ones(1, dtype=torch.float32)
-        self.mu_hid = torch.ones(1, dtype=torch.float32)
-        self.log_sigma2_hid = torch.ones(1, dtype=torch.float32)
-        self.learn_init = learn_init
-        self.hid_prop = hid_prop
-
-        if ingate is None:
-            self.W_in_to_ingate = nn.Parameter(torch.empty(self.incoming, self.num_units))
-            self.W_hid_to_ingate = nn.Parameter(torch.empty(self.num_units, self.num_units))
-            self.b_ingate = nn.Parameter(torch.full((self.num_units,), 0.0, dtype=torch.float32))
-            nn.init.xavier_uniform_(self.W_in_to_ingate) # GlorotUniform
-            nn.init.orthogonal_(self.W_hid_to_ingate, gain=1.1) # Orthogonal
-            self.nonlinearity_ingate = utils.hard_sigmoid
-        
-        if forgetgate is None:
-            self.W_in_to_forgetgate = nn.Parameter(torch.empty(self.incoming, self.num_units))
-            self.W_hid_to_forgetgate = nn.Parameter(torch.empty(self.num_units, self.num_units))
-            self.b_forgetgate = nn.Parameter(torch.full((self.num_units,), 1.0, dtype=torch.float32))
-            nn.init.xavier_uniform_(self.W_in_to_forgetgate)
-            nn.init.orthogonal_(self.W_hid_to_forgetgate, gain=1.1)
-            self.nonlinearity_forgetgate = utils.hard_sigmoid
-
-        if cell is None:
-            self.W_in_to_cell = nn.Parameter(torch.empty(self.incoming, self.num_units))
-            self.W_hid_to_cell = nn.Parameter(torch.empty(self.num_units, self.num_units))
-            self.b_cell = nn.Parameter(torch.full((self.num_units,), 0.0, dtype=torch.float32))
-            nn.init.xavier_uniform_(self.W_in_to_cell)
-            nn.init.orthogonal_(self.W_hid_to_cell, gain=1.1)
-            self.nonlinearity_cell = torch.tanh
-
-        if outgate is None:
-            self.W_in_to_outgate = nn.Parameter(torch.empty(self.incoming, self.num_units))
-            self.W_hid_to_outgate = nn.Parameter(torch.empty(self.num_units, self.num_units))
-            self.b_outgate = nn.Parameter(torch.full((self.num_units,), 0.0, dtype=torch.float32))
-            nn.init.xavier_uniform_(self.W_in_to_outgate)
-            nn.init.orthogonal_(self.W_hid_to_outgate, gain=1.1)
-            self.nonlinearity_outgate = utils.hard_sigmoid
-
-        self.hid_init = nn.Parameter(
-            torch.full((1, self.num_units), hid_init, dtype=torch.float32),
-            requires_grad=learn_init
-        )
-
-        self.cell_init = nn.Parameter(
-            torch.full((1, self.num_units), cell_init, dtype=torch.float32),
-            requires_grad=learn_init
-        )
-    
-    def input_preactivation(self, input: torch.Tensor, gate_type: str) -> torch.Tensor:
-        if gate_type == 'input':
-            return input @ self.W_in_to_ingate
-        elif gate_type == 'forget':
-            return input @ self.W_in_to_forgetgate
-        elif gate_type == 'cell':
-            return input @ self.W_in_to_cell
-        elif gate_type == 'output':
-            return input @ self.W_in_to_outgate
-        else:
-            raise ValueError(f"Unknown gate_type: {gate_type}")
-    
-    def generate_noise_and_clip(self, num_batch, seq_len):
-        return
-    
-    def forward(self, inputs, deterministic: bool = False, clip: bool = False):
-        """
-        inputs: либо тензор (batch, seq_len, input_dim) либо список/tuple, где inputs[0] - вход,
-                и при self.mask_incoming_index > 0 mask находится в inputs[self.mask_incoming_index].
-        Возвращает:
-        - если self.only_return_final: (batch, num_units)
-        - elif self.hid_prop: (2, batch, seq_len, num_units)
-        - else: (batch, seq_len, num_units)
-        """
-        if isinstance(inputs, (list, tuple)):
-            input = inputs[0]
-        else:
-            input = inputs
-
-        mask = None
-        if getattr(self, "mask_incoming_index", -1) > 0:
-            if isinstance(inputs, (list, tuple)) and len(inputs) > self.mask_incoming_index:
-                mask = inputs[self.mask_incoming_index]
-            else:
-                mask = None
-
-        input = input.transpose(0, 1)
-        seq_len, num_batch, _ = input.shape
-
-        try:
-            self.generate_noise_and_clip(num_batch, deterministic, clip)
-        except TypeError:
-            self.generate_noise_and_clip(num_batch, seq_len)
-
-        input_i = self.input_preactivation(input, 'input', deterministic=deterministic, clip=clip) + self.b_ingate
-        input_f = self.input_preactivation(input, 'forget', deterministic=deterministic, clip=clip) + self.b_forgetgate
-        input_c = self.input_preactivation(input, 'cell', deterministic=deterministic, clip=clip) + self.b_cell
-        input_o = self.input_preactivation(input, 'output', deterministic=deterministic, clip=clip) + self.b_outgate
-
-        if self.hid_prop:
-            hid_init, cell_init = inputs[1][0], inputs[1][1]
-        else:
-            hid_init = self.hid_init.expand(num_batch, -1).to(dtype=input.dtype)
-            cell_init = self.cell_init.expand(num_batch, -1).to(dtype=input.dtype)
-
-        hid = hid_init
-        cell = cell_init
-
-        hid_seq = []
-        cell_seq = []
-
-        if mask is not None:
-            if mask.ndim == 3:
-                mask_seq = mask.permute(1, 0, 2)
-            else:
-                mask_seq = mask.unsqueeze(-1).permute(1, 0, 2)
-            mask_seq = mask_seq.to(dtype=input.dtype)
-        else:
-            mask_seq = None
-
-        for t in range(seq_len):
-            input_n_i = input_i[t]
-            input_n_f = input_f[t]
-            input_n_c = input_c[t]
-            input_n_o = input_o[t]
-
-            hid_preact_i = self.hidden_preactivation(hid, 'input')
-            hid_preact_f = self.hidden_preactivation(hid, 'forget')
-            hid_preact_c = self.hidden_preactivation(hid, 'cell')
-            hid_preact_o = self.hidden_preactivation(hid, 'output')
-
-            ingate = self.nonlinearity_ingate(input_n_i + hid_preact_i)
-            forgetgate = self.nonlinearity_forgetgate(input_n_f + hid_preact_f)
-            cell_candidate = self.nonlinearity_cell(input_n_c + hid_preact_c)
-            cell = forgetgate * cell + ingate * cell_candidate
-            outgate = self.nonlinearity_outgate(input_n_o + hid_preact_o)
-            hid = outgate * self.nonlinearity(cell)
-
-            if mask_seq is not None:
-                m = mask_seq[t]
-                cell = m * cell + (1.0 - m) * cell_init
-                hid  = m * hid  + (1.0 - m) * hid_init
-
-            hid_seq.append(hid)
-            cell_seq.append(cell)
-
-        cell_out = torch.stack(cell_seq, dim=0)
-        hid_out = torch.stack(hid_seq, dim=0)
-
-        if self.only_return_final:
-            return hid_out[:, -1, :]
-
-        if self.backwards:
-            hid_out = hid_out.flip(dims=[0])
-            cell_out = cell_out.flip(dims=[0])
-
-        hid_out = hid_out.transpose(0, 1)
-        cell_out = cell_out.transpose(0, 1)
-
-        if self.hid_prop:
-            return torch.cat([hid_out.unsqueeze(0), cell_out.unsqueeze(0)], dim=0)
-        else:
-            return hid_out
-
-
-
-
-class Dense(nn.Module):
-    def __init__(self, incoming, num_units, nonlinearity=nn.Identity()):
-        super().__init__()
-        self.num_units = num_units
-        self.nonlinearity = nonlinearity
-        
-        self.W = nn.Parameter(torch.empty(incoming, num_units))
-        self.b = nn.Parameter(torch.zeros(num_units))
-        
-        nn.init.xavier_uniform_(self.W)
-
-    def pre_activation(self, input):
-        return torch.matmul(input, self.W)
-    
-    def get_output_shape_for(self, input_shape):
-        return tuple(input_shape[:-1]) + (self.num_units,)
-
-    def get_output_for(self, input):
-        return self.nonlinearity(self.pre_activation(input) + self.b)
-
-    def get_ard(self):
-        return {"w": torch.ones_like(self.W)}
-    
-    def forward(self, input, **kwargs):
-        """
-        input: tensor with last dim == incoming, arbitrary leading dims allowed
-        returns: tensor with same leading dims and last dim == num_units
-        """
-        out = self.pre_activation(input) + self.b
-        out = self.nonlinearity(out)
-        return out
-
-
-class BayesianDense(Dense):
-    def __init__(self, 
-                 incoming, 
-                 num_units, 
-                 log_sigma_init = -3.0,
-                 thresh=3.0,
-                 W_initializer=None, 
-                 b_init=0.0, 
-                 nonlinearity=lambda x: x):
-        super().__init__(incoming, num_units, nonlinearity)
-
-        if isinstance(incoming, int):
-            self.num_inputs = int(incoming)
-        else:
-            try:
-                self.num_inputs = int(incoming[-1])
-            except Exception:
-                raise ValueError("incoming must be int or shape-like")
-
-        self.num_units = int(num_units)
-        self.nonlinearity = nonlinearity
-        self.thresh = thresh
-        self.dtype = torch.float32
-
-        self.W = nn.Parameter(torch.empty(self.num_inputs, self.num_units, dtype=self.dtype))
-        self.b = nn.Parameter(torch.full((self.num_units,), float(b_init), dtype=self.dtype))
-        self.logsig = nn.Parameter(torch.full((self.num_inputs, self.num_units), float(log_sigma_init), dtype=self.dtype))
-
-        if W_initializer is None:
-            nn.init.xavier_uniform_(self.W)
-        else:
-            W_initializer(self.W)
-
-    def pre_activation(self, input: torch.Tensor, deterministic: bool = False, clip: bool = False):
-        """
-        input: либо 2D (batch, input_dim) либо 3D (batch, seq_len, input_dim)
-        Возвращает: mu + шум*si (или только mu в deterministic режиме)
-        """
-        W_eff = self.W
-        sigma2 = torch.exp(2.0 * self.logsig)
-
-        if clip:
-            log_alpha = utils.clip_func(2.0 * self.logsig - utils.safe_torch_log(W_eff.pow(2)))
-            clip_mask = log_alpha.ge(self.thresh)
-            W_eff = torch.where(clip_mask, torch.zeros_like(W_eff), W_eff)
-            sigma2 = torch.where(clip_mask, torch.zeros_like(sigma2), sigma2)
-
-        if deterministic:
-            return input @ W_eff
-        
-        mu = input @ W_eff
-        si = torch.sqrt((input * input) @ sigma2 + 1e-8)
-
-        if input.ndim == 2:
-            noise = torch.randn_like(mu)
-        else:
-            noise = torch.randn((mu.shape[0], 1, mu.shape[2]))
-
-        return mu + noise * si
-
-    def eval_reg(self, train_size: float):
-        """
-        alpha regularization: utils.alpha_regf(clip_func(2*logsig - log(W^2))).sum() / train_size
-        Возвращаем torch scalar
-        """
-        log_alpha = utils.clip_func(2.0 * self.logsig - utils.safe_torch_log(self.W.pow(2)))
-        reg = utils.alpha_regf(log_alpha).sum() / float(train_size)
-        return reg
-
-    def get_ard(self) -> dict[str, torch.Tensor]:
-        """
-        Возвращаем torch-маску (bool tensor).
-        Маска не требует градиентов и используется для sparsification.
-        """
-        W = self.W.detach()
-        logsig = self.logsig.detach()
-        log_alpha = 2.0 * logsig - 2.0 * utils.safe_torch_log(torch.abs(W))
-        mask = (log_alpha < self.thresh)
-
-        return {"w": mask}
-    
-    def forward(self, input: torch.Tensor, deterministic: bool = False, clip: bool = False, **kwargs):
-        """
-        input: tensor with last dim == num_inputs, can be 2D (batch, in) or 3D (batch, seq_len, in)
-        deterministic, clip: передаются в pre_activation и управляют режимом
-        Возвращает: nonlinearity( pre_activation(input, deterministic, clip) + b )
-        """
-        out = self.pre_activation(input, deterministic=deterministic, clip=clip)
-        out = out + self.b
-        return self.nonlinearity(out)
-
-
-# class BayesianDense(nn.Module):
-#     """
-#     Dense layer with Sparse Variational Dropout.
-    
-#     Использует Local Reparameterization Trick:
-#     Вместо сэмплирования весов W = μ + σ·ε и вычисления y = x·W,
-#     напрямую сэмплируем активации: y = x·μ + √(x²·σ²)·ε
-        
-#     Параметры:
-#         μ (self.mu_w): среднее весов, shape (in, out)
-#         log σ (self.logsig_w): логарифм стд. отклонения, shape (in, out)
-#         b: bias, shape (out,)
-#     """
-    
-#     def __init__(self, 
-#                  incoming, 
-#                  num_units, 
-#                  log_sigma_init: float = -3.0,
-#                  thresh: float = 3.0,
-#                  W_initializer=None, 
-#                  b_init: float = 0.0, 
-#                  nonlinearity=None):
-#         super().__init__()
-
-#         if isinstance(incoming, int):
-#             self.num_inputs = int(incoming)
-#         else:
-#             try:
-#                 self.num_inputs = int(incoming[-1])
-#             except Exception:
-#                 raise ValueError("incoming must be int or shape-like")
-
-#         self.num_units = int(num_units)
-#         self.nonlinearity = nonlinearity if nonlinearity is not None else (lambda x: x)
-#         self.thresh = float(thresh)
-#         self.log_sigma_init = float(log_sigma_init)
-#         self.dtype = torch.float32
-        
-#         self.mu_w = nn.Parameter(torch.randn(self.num_inputs, self.num_units, dtype=self.dtype) * 1e-3)
-#         self.logsig_w = nn.Parameter(torch.full((self.num_inputs, self.num_units), log_sigma_init, dtype=self.dtype))
-#         self.b = nn.Parameter(torch.full((self.num_units,), float(b_init), dtype=self.dtype))
-
-#         if W_initializer is None:
-#             nn.init.xavier_uniform_(self.mu_w)
-#         else:
-#             W_initializer(self.mu_w)
-    
-#     def _compute_log_alpha(self, logsig, mu):
-#         """
-#         log α = log(σ²/μ²) = 2·logsig - 2·log|μ|
-#         """
-#         log_alpha = 2.0 * logsig - 2.0 * utils.safe_torch_log(mu)
-#         return utils.clip_func(log_alpha)
-
-#     def forward(self, 
-#                 input: torch.Tensor, 
-#                 deterministic: bool = False, 
-#                 clip: bool = False, 
-#                 **kwargs):
-#         """
-#         Forward pass с Local Reparameterization Trick.
-        
-#         Args:
-#             input: (batch, in) или (batch, seq_len, in)
-#             deterministic: если True, используем только μ
-#             clip: если True, обнуляем "мёртвые" веса
-            
-#         Returns:
-#             output: nonlinearity(pre_activation + bias)
-#         """
-        
-#         device = input.device
-#         mu_w = self.mu_w
-
-#         if clip:
-#             log_alpha = self._compute_log_alpha(self.logsig_w, mu_w)
-#             dead_mask = log_alpha >= self.thresh
-#             mu_w = torch.where(dead_mask, torch.zeros_like(mu_w), mu_w)
-#             sigma2 = torch.where(
-#                 dead_mask, 
-#                 torch.zeros_like(self.logsig_w), 
-#                 torch.exp(2.0 * self.logsig_w)
-#             )
-#         else:
-#             sigma2 = torch.exp(2.0 * self.logsig_w)
-        
-#         # Local Reparameterization Trick
-#         # y = x·μ + √(x²·σ²)·ε
-        
-#         mu_activation = input @ mu_w
-        
-#         if deterministic:
-#             pre_activation = mu_activation
-#         else:
-#             var_activation = (input * input) @ sigma2
-            
-#             std_activation = torch.sqrt(var_activation)
-            
-#             if input.ndim == 2:
-#                 noise = torch.randn_like(mu_activation)
-#             else:
-#                 noise = torch.randn(
-#                     (input.shape[0], 1, self.num_units), 
-#                     device=device, 
-#                     dtype=self.dtype
-#                 )
-            
-#             # y = μ + σ·ε
-#             pre_activation = mu_activation + std_activation * noise
-        
-#         output = self.nonlinearity(pre_activation + self.b)
-        
-#         return output
-
-#     def eval_reg(self, train_size: int):
-#         """
-#         KL divergence regularization для ELBO.
-        
-#         Returns:
-#             KL / train_size
-#         """
-        
-#         log_alpha = self._compute_log_alpha(self.logsig_w, self.mu_w)
-#         kl = utils.alpha_regf(log_alpha).sum()
-        
-#         return kl / float(train_size)
-
-#     def get_ard(self) -> dict:
-#         """
-#         Получение ARD масок.
-        
-#         Returns:
-#             dict с маской "w": True = вес активен, False = можно отбросить
-#         """
-        
-#         with torch.no_grad():
-#             log_alpha = self._compute_log_alpha(self.logsig_w, self.mu_w)
-#             # True = активный вес (log_alpha < thresh)
-#             mask = log_alpha < self.thresh
-        
-#         return {"w": mask}
-
-
-
-class BayesianDense_noLRT(Dense):
-    def __init__(self, 
-                 incoming, 
-                 num_units, 
-                 log_sigma_init=-3.0,
-                 W_initializer=None, 
-                 b_init=0.0, 
-                 nonlinearity=lambda x: x):
-        """
-        incoming: int (input size) or shape-like with last dim = input size.
-        """
-        super().__init__(incoming, num_units, nonlinearity)
-        if isinstance(incoming, int):
-            self.num_inputs = int(incoming)
-        else:
-            try:
-                self.num_inputs = int(incoming[-1])
-            except Exception:
-                raise ValueError("incoming must be int or shape-like")
-
-        self.num_units = int(num_units)
-        self.nonlinearity = nonlinearity
-        self.thresh = 3.0
-
-        self.W = nn.Parameter(torch.empty(self.num_inputs, self.num_units, dtype=torch.float32))
-        self.b = nn.Parameter(torch.full((self.num_units,), float(b_init), dtype=torch.float32))
-        self.logsig = nn.Parameter(torch.full((self.num_inputs, self.num_units), float(log_sigma_init), dtype=torch.float32))
-
-        if W_initializer is None:
-            nn.init.xavier_uniform_(self.W)
-        else:
-            try:
-                W_initializer(self.W)
-            except Exception:
-                self.W.data.copy_(torch.tensor(W_initializer(self.W.shape), dtype=self.W.dtype))
-
-    def pre_activation(self, input: torch.Tensor, deterministic: bool = False, clip: bool = False):
-        """
-        input: 2D (batch, in) или 3D (batch, seq_len, in) (и др. формы с последним измерением in)
-        """
-        sigma2 = torch.exp(2 * self.logsig)
-        W_eff = self.W
-        
-        if clip:
-            log_alpha = utils.clip_func(2 * self.logsig - utils.safe_torch_log(self.W.pow(2)))
-            clip_mask = log_alpha.ge(self.thresh)
-            W_eff = torch.where(clip_mask, torch.zeros_like(W_eff), W_eff)
-            sigma2 = torch.where(clip_mask, torch.zeros_like(sigma2), sigma2)
-
-        if deterministic:
-            return input @ W_eff
-        
-        if input.ndim == 2:
-            mu = input @ W_eff
-            si = torch.sqrt(input.pow(2) @ sigma2 + 1e-8)
-            return mu + torch.randn_like(mu) * si
-        else:
-            W_noisy = W_eff + torch.randn_like(W_eff) * torch.exp(self.logsig)
-            return input @ W_noisy
-
-    def eval_reg(self, train_size: float):
-        log_alpha = utils.clip_func(2 * self.logsig - utils.safe_torch_log(self.W.pow(2)))
-        reg = utils.alpha_regf(log_alpha).sum() / float(train_size)
-        return reg
-    
-    def get_ard(self) -> dict[str, torch.Tensor]:
-        W = self.W.detach()
-        logsig = self.logsig.detach()
-        log_alpha = 2 * logsig - 2 * utils.safe_torch_log(torch.abs(W))
-        mask = (log_alpha < self.thresh)
-        return {"w": mask}
-    
-    def forward(self, input: torch.Tensor, deterministic: bool = None, clip: bool = False) -> torch.Tensor:
-        if deterministic is None:
-            deterministic = not self.training
-        out = self.pre_activation(input, deterministic=deterministic, clip=clip)
-        out = out + self.b
-        return self.nonlinearity(out)

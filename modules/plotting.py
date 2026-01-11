@@ -1,4 +1,6 @@
 import matplotlib.pyplot as plt
+import matplotlib as mpl
+import seaborn as sns
 import numpy as np
 from typing import List, Tuple
 
@@ -58,3 +60,61 @@ def plot_am_am_pm(
 
     plt.tight_layout()
     plt.show()
+
+
+
+def plot_weight_heatmaps(
+    model,
+    only_weights=True,
+    vmin=None,
+    vmax=None,
+    cmap="coolwarm",
+):
+    """
+    Plot heatmaps of model weight tensors.
+
+    Args:
+        model (nn.Module): PyTorch model
+        only_weights (bool): plot only parameters containing 'weight'
+        vmin, vmax: color scale limits (None -> auto per tensor)
+        cmap (str): matplotlib colormap
+    """
+
+    for module_name, module in model.named_modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            if only_weights and "weight" not in param_name:
+                continue
+
+            data = param.detach().cpu().numpy()
+
+            if data.ndim == 0:
+                continue
+
+            if data.ndim == 1:
+                data = data.reshape(1, -1)
+
+            mask = np.abs(data) > 0
+            data_vis = np.where(mask, data, np.nan)
+            
+            cmap = mpl.colormaps.get_cmap(cmap)
+            cmap.set_bad(color="magenta")
+                        
+            plt.figure(figsize=(max(2, data_vis.shape[1]*0.6), max(2, data_vis.shape[0]*0.2)))
+            sns.heatmap(
+                data_vis,
+                annot=True,
+                fmt=".1f",
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
+                cbar_kws={
+                'shrink': 0.5,
+                'aspect': 20,
+                'pad': 0.05
+                }
+            )
+            plt.title(f"{module_name or '<root>'}.{param_name}")
+            plt.xlabel("in")
+            plt.ylabel("out")
+            plt.tight_layout()
+            plt.show()

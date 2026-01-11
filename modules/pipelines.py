@@ -27,7 +27,12 @@ class SimplePipeline():
         self.epochs = self.train_props["epochs"]
         self.acpr_meter = self.train_props["acpr_meter"]
 
-        self.results = {}
+        self.results = {
+            "pa": {},
+            "dla": {},
+            "ila": {},
+            "ilc": {}
+        }
         
         self.criterion = metrics.compute_mse
         self.metric_criterion = metrics.compute_nmse

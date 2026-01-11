@@ -156,6 +156,9 @@ def noise_realizations(num_realizations, model, x, y_target, acpr_meter):
 
 
 class ACPR:
+    
+    _EPS = 1e-10
+    
     def __init__(
         self,
         sample_rate: float,
@@ -290,7 +293,9 @@ class ACPR:
     def _integrate_powers(self, psd: np.ndarray):
         """Integrate PSD over main and adjacent channel masks."""
         P0 = np.sum(psd[self.main_mask]) * self.df
+        P0 = max(P0, self._EPS)
         P_adj = np.array([np.sum(psd[m]) * self.df for m in self.adj_masks])
+        P_adj = max(P_adj, self._EPS)
         return P0, P_adj
 
     def _convert_units(self, P0: float, P_adj: np.ndarray):
@@ -335,6 +340,7 @@ class ACPR:
         sig = self._apply_filter(sig)
         psd = self._compute_psd(sig)
         P0, P_adj = self._integrate_powers(psd)
+        
         acpr, main_p, adj_p = self._convert_units(P0, P_adj)
 
         outputs = [acpr]
