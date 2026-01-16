@@ -204,7 +204,7 @@ class CascadeModel(nn.Module):
         else:
             x = self.model_1(x)
             
-        if self.cascade_type == "ila" and self.gain:
-            x = x / self.gain
+        # if self.cascade_type == "ila" and self.gain:
+        #     x = x / self.gain
         x = self.model_2(x)
         return x

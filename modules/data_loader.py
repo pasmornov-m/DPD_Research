@@ -165,23 +165,36 @@ class IQDataset(Dataset):
         return self.features[idx], self.targets[idx]
 
 
-def build_dataloaders(data_dict, frame_length, batch_size, batch_size_eval, arch=None):
-    nperseg = data_dict["config"]["nperseg"]
+def build_dataloaders(container: DataContainer, 
+                      frame_length: int, 
+                      batch_size: int, 
+                      batch_size_eval: int, 
+                      arch: str | None = None):
+    
+    nperseg = container.nperseg
 
-    x_train = utils.complex_to_iq(data_dict["train_input"])
-    y_train = utils.complex_to_iq(data_dict["train_output"])
-    x_val = utils.complex_to_iq(data_dict["val_input"])
-    y_val = utils.complex_to_iq(data_dict["val_output"])
+    x_train = utils.complex_to_iq(container.train_input)
+    y_train = utils.complex_to_iq(container.train_output)
+    x_val = utils.complex_to_iq(container.val_input)
+    y_val = utils.complex_to_iq(container.val_output)
     
     if arch == "dla":
-        y_train = utils.complex_to_iq(data_dict["train_output_target"])
-        y_val = utils.complex_to_iq(data_dict["val_output_target"])
+        x_train = utils.complex_to_iq(container.train_input)
+        y_train = utils.complex_to_iq(container.train_output_target)
+        x_val = utils.complex_to_iq(container.val_input)
+        y_val = utils.complex_to_iq(container.val_output_target)
+        
     elif arch == "ila":
-        y_train = x_train
-        y_val = x_val
+        x_train = utils.complex_to_iq(container.train_output) / container.gain
+        y_train = utils.complex_to_iq(container.train_input)
+        x_val = utils.complex_to_iq(container.val_output) / container.gain
+        y_val = utils.complex_to_iq(container.val_input)
+    
     elif arch == "ilc":
-        y_train = utils.complex_to_iq(data_dict["ilc_train_output"])
-        ilc_val_output = data_dict.get("ilc_val_output")
+        x_train = utils.complex_to_iq(container.train_input)
+        y_train = utils.complex_to_iq(container.ilc_train_output)
+        x_val = utils.complex_to_iq(container.val_input)
+        ilc_val_output = container.ilc_val_output
         if ilc_val_output is not None:
             y_val = utils.complex_to_iq(ilc_val_output)
         else:

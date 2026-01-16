@@ -293,9 +293,9 @@ class ACPR:
     def _integrate_powers(self, psd: np.ndarray):
         """Integrate PSD over main and adjacent channel masks."""
         P0 = np.sum(psd[self.main_mask]) * self.df
-        P0 = max(P0, self._EPS)
         P_adj = np.array([np.sum(psd[m]) * self.df for m in self.adj_masks])
-        P_adj = max(P_adj, self._EPS)
+        P0 = np.maximum(P0, self._EPS)
+        P_adj = np.maximum(P_adj, self._EPS)
         return P0, P_adj
 
     def _convert_units(self, P0: float, P_adj: np.ndarray):
