@@ -1,0 +1,21 @@
+services:
+
+  notebook:
+    container_name: notebook
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    working_dir: /home/jovyan/work
+    ports:
+      - 8888:8888
+    volumes:
+      - ./:/home/jovyan/work
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+    command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''
+    networks:
+      - all_in_one
+
+networks:
+  all_in_one:
