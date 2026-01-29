@@ -1,10 +1,8 @@
 import time
 from datetime import timedelta
-
 import numpy as np
 import torch
 import torch.nn.utils.prune as prune
-
 from modules import data_loader, metrics, learning, utils, pipelines
 
 
@@ -114,12 +112,44 @@ def remove_prunned_parameters(parameters_to_prune):
 
 
 def get_parameters_to_prune(model):
+    """
+    Collect all parameters suitable for unstructured pruning in RTDTNN.
+
+    Returns:
+        List of (module, name) tuples for pruning.
+    """
     parameters_to_prune = []
+
     for module in model.modules():
-        if isinstance(module, (torch.nn.LSTM, torch.nn.Linear)):
+        # Linear layers
+        if isinstance(module, torch.nn.Linear):
+            if hasattr(module, "weight") and module.weight is not None:
+                parameters_to_prune.append((module, "weight"))
+
+        # LSTM / GRU layers
+        elif isinstance(module, (torch.nn.LSTM, torch.nn.GRU)):
             for name, param in module.named_parameters(recurse=False):
-                if "weight" in name:
+                if "weight" in name and param is not None:
                     parameters_to_prune.append((module, name))
+
+        # MultiheadAttention
+        elif isinstance(module, torch.nn.MultiheadAttention):
+            # in_proj_weight (combined Q,K,V)
+            if hasattr(module, "in_proj_weight") and module.in_proj_weight is not None:
+                parameters_to_prune.append((module, "in_proj_weight"))
+            # out_proj weight
+            if hasattr(module, "out_proj") and hasattr(module.out_proj, "weight"):
+                parameters_to_prune.append((module.out_proj, "weight"))
+
+        # Conv1d layers
+        elif isinstance(module, torch.nn.Conv1d):
+            if hasattr(module, "weight") and module.weight is not None:
+                parameters_to_prune.append((module, "weight"))
+
+        # Ignore LayerNorm / bias
+        elif isinstance(module, torch.nn.LayerNorm):
+            continue
+
     return parameters_to_prune
 
 
@@ -152,8 +182,8 @@ class SparsityPipeline(pipelines.SimplePipeline):
 
     def ilc_prune_amount(self, amount_range=np.arange(0, 1, 0.1), n_runs: int = 0, pruning_method=prune.L1Unstructured):
         
-        self._evaluate_ilc_signal()
-        self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(data_dict=self.container.to_dict(), 
+        self.evaluate_ilc_signal()
+        self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(container=self.container, 
                                                                             frame_length=self.frame_length, 
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 

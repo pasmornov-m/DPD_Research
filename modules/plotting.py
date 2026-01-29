@@ -95,6 +95,8 @@ def plot_weight_heatmaps(
 
             mask = np.abs(data) > 0
             data_vis = np.where(mask, data, np.nan)
+            if data_vis.ndim == 3 and data_vis.shape[-1] == 1:
+                data_vis = data_vis[..., 0]
             
             cmap = mpl.colormaps.get_cmap(cmap)
             cmap.set_bad(color="magenta")

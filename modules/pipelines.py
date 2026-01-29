@@ -9,7 +9,7 @@ import time
 from datetime import timedelta
 
 
-class SimplePipeline():
+class SimplePipeline:
     def __init__(self, 
                  container: data_loader.DataContainer, 
                  train_props: Dict, 
@@ -104,16 +104,16 @@ class SimplePipeline():
                                                                                             P=self.train_props["P"], 
                                                                                             arch="ila")
         else:
-            self.pa_train_loader, self.pa_val_loader = data_loader.build_dataloaders(data_dict=self.container.to_dict(), 
+            self.pa_train_loader, self.pa_val_loader = data_loader.build_dataloaders(container=self.container, 
                                                                            frame_length=self.frame_length, 
                                                                            batch_size=self.batch_size, 
                                                                            batch_size_eval=self.batch_size_eval)
-            self.dla_train_loader, self.dla_val_loader = data_loader.build_dataloaders(data_dict=self.container.to_dict(), 
+            self.dla_train_loader, self.dla_val_loader = data_loader.build_dataloaders(container=self.container, 
                                                                             frame_length=self.frame_length, 
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 
                                                                             arch="dla")
-            self.ila_train_loader, self.ila_val_loader = data_loader.build_dataloaders(data_dict=self.container.to_dict(), 
+            self.ila_train_loader, self.ila_val_loader = data_loader.build_dataloaders(container=self.container, 
                                                                             frame_length=self.frame_length, 
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 
@@ -258,7 +258,7 @@ class SimplePipeline():
             "count_params": count_params
         }
     
-    def _evaluate_ilc_signal(self):
+    def evaluate_ilc_signal(self):
         time_train = 0
         start = time.time()
         
@@ -305,7 +305,7 @@ class SimplePipeline():
         time_train = 0
         if not is_load:
             
-            self._evaluate_ilc_signal()
+            self.evaluate_ilc_signal()
             
             if issubclass(self.base_model, ClassicGMP):
                 self.ilc_train_loader = [(self.container.train_input, self.container.ilc_train_output)]

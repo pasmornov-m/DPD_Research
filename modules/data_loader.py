@@ -209,13 +209,8 @@ def build_dataloaders(container: DataContainer,
     return train_loader, val_loader
 
 
-
-
-
 def build_X_in(iq_signal: torch.Tensor, M: int = 5, P: int = 4) -> torch.Tensor:
     """
-    Формирует входной тензор X_in для RTVDNN/RTDTNN полностью векторизованно.
-
     Parameters:
         iq_signal: torch.Tensor комплексной формы (N,) dtype=torch.complex64 или torch.complex128
         M: memory depth

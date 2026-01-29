@@ -3,8 +3,6 @@ from torch import nn
 from modules import metrics, utils
 
 
-
-
 @utils.timer_decorator
 def ilc_signal(input_data, target_data, pa_model, epochs=100, learning_rate=0.1):
     u = torch.nn.Parameter(input_data.clone(), requires_grad=True)
