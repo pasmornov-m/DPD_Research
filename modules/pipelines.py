@@ -318,7 +318,7 @@ class SimplePipeline:
                                                                                 P=self.train_props["P"], 
                                                                                 arch="ilc")
             else:
-                self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(data_dict=self.container.to_dict(), 
+                self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(container=self.container, 
                                                                                 frame_length=self.frame_length, 
                                                                                 batch_size=self.batch_size, 
                                                                                 batch_size_eval=self.batch_size_eval, 
