@@ -1,10 +1,10 @@
 from dataclasses import dataclass, asdict
-from typing import Optional, Callable, Tuple, Dict, Type, Any
+from typing import Optional, Callable, Dict, Type
 import torch
-from modules.nn_model import GRU, LSTM, DenseNetRegressor, CustomTCN, DiffESN, RTDTNN
-from modules.gmp_model import ClassicGMP, BatchGMP
-
-
+from models.gmp import GMP
+from models.gru import GRU
+from models.lstm import LSTM
+from models.rtdtnn import RTDTNN
 
 
 @dataclass
@@ -73,40 +73,9 @@ def make_snr_params(snr_range: list,
                             ))
 
 
-# @dataclass
-# class data_params:
-#     x_train: torch.Tensor
-#     y_train_target: torch.Tensor
-#     x_val: torch.Tensor
-#     y_val_target: torch.Tensor
-
-# def make_data_params(x_train: torch.Tensor,
-#                      y_train_target: torch.Tensor,
-#                      x_val: torch.Tensor,
-#                      y_val_target: torch.Tensor):
-#     return asdict(data_params(
-#                             x_train=x_train,
-#                             y_train_target=y_train_target,
-#                             x_val=x_val,
-#                             y_val_target=y_val_target
-#                             ))
-
-
-
-
 MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
-    ClassicGMP: lambda tp: make_gmp_params(
-        Ka=tp["gmp_degree"],
-        La=tp["gmp_degree"],
-        Kb=tp["gmp_degree"],
-        Lb=tp["gmp_degree"],
-        Mb=tp["gmp_degree"],
-        Kc=tp["gmp_degree"],
-        Lc=tp["gmp_degree"],
-        Mc=tp["gmp_degree"],
-    ),
 
-    BatchGMP: lambda tp: make_gmp_params(
+    GMP: lambda tp: make_gmp_params(
         Ka=tp["gmp_degree"],
         La=tp["gmp_degree"],
         Kb=tp["gmp_degree"],
@@ -127,21 +96,6 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
         "hidden_size": tp["hidden_size"],
         "num_layers": tp["num_layers"],
         "bidirectional": tp["bidirectional"],
-    },
-
-    DenseNetRegressor: lambda tp: {
-        "blocks": tp["blocks"],
-    },
-
-    CustomTCN: lambda tp: {
-        "num_channels": tp["num_channels"],
-        "kernel_size": tp["kernel_size"],
-        "dropout": tp["dropout"],
-    },
-
-    DiffESN: lambda tp: {
-        "n_reservoir": tp["n_reservoir"],
-        "sparsity": tp["sparsity"],
     },
 
     RTDTNN: lambda tp: {

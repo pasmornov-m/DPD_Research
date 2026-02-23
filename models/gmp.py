@@ -30,22 +30,20 @@ class GMP(BaseModel, nn.Module):
         self.Kb, self.Lb, self.Mb = Kb, Lb, Mb
         self.Kc, self.Lc, self.Mc = Kc, Lc, Mc
         
-        self.dtype = torch.float32
+        self.a = nn.Parameter(0.01 * torch.randn((Ka, La), dtype=torch.complex64))
+        self.b = nn.Parameter(0.01 * torch.randn((Kb, Lb, Mb), dtype=torch.complex64))
+        self.c = nn.Parameter(0.01 * torch.randn((Kc, Lc, Mc), dtype=torch.complex64))
 
-        self.a = nn.Parameter(0.01 * torch.randn((Ka, La, 2), dtype=self.dtype))
-        self.b = nn.Parameter(0.01 * torch.randn((Kb, Lb, Mb, 2), dtype=self.dtype))
-        self.c = nn.Parameter(0.01 * torch.randn((Kc, Lc, Mc, 2), dtype=self.dtype))
-
-        self.register_buffer('powers_Ka', torch.arange(Ka, dtype=self.dtype))
-        self.register_buffer('powers_Kb', torch.arange(Kb, dtype=self.dtype))
-        self.register_buffer('powers_Kc', torch.arange(Kc, dtype=self.dtype))
+        self.register_buffer('powers_Ka', torch.arange(Ka, dtype=torch.long))
+        self.register_buffer('powers_Kb', torch.arange(Kb, dtype=torch.long))
+        self.register_buffer('powers_Kc', torch.arange(Kc, dtype=torch.long))
         
-        self.register_buffer('arange_La', torch.arange(La, dtype=self.dtype)[:, None])
-        self.register_buffer('arange_Lb', torch.arange(Lb, dtype=self.dtype)[:, None])
-        self.register_buffer('arange_Lc', torch.arange(Lc, dtype=self.dtype)[:, None])
+        self.register_buffer('arange_La', torch.arange(La, dtype=torch.long)[:, None])
+        self.register_buffer('arange_Lb', torch.arange(Lb, dtype=torch.long)[:, None])
+        self.register_buffer('arange_Lc', torch.arange(Lc, dtype=torch.long)[:, None])
         
-        self.register_buffer('arange_Mb', torch.arange(Mb, dtype=self.dtype)[None, None, :])
-        self.register_buffer('arange_Mc', torch.arange(Mc, dtype=self.dtype)[None, None, :])
+        self.register_buffer('arange_Mb', torch.arange(Mb, dtype=torch.long)[None, None, :])
+        self.register_buffer('arange_Mc', torch.arange(Mc, dtype=torch.long)[None, None, :])
     
     def _get_filename(self):
         return (f"{self.model_name}_{self.class_name}_"
@@ -140,17 +138,13 @@ class GMP(BaseModel, nn.Module):
         term_b = self._term_b(x_padded, t_idx)
         term_c = self._term_c(x_padded, t_idx)
 
-        a_cmplx = self._to_complex(self.a)
-        b_cmplx = self._to_complex(self.b)
-        c_cmplx = self._to_complex(self.c)
-
         y = torch.zeros(B, T, dtype=torch.complex64, device=x.device)
 
         if term_a is not None:
-            y += torch.einsum('bltk,k l->bt', term_a, a_cmplx)
+            y += torch.einsum('bltk,k l->bt', term_a, self.a)
         if term_b is not None:
-            y += torch.einsum('blmtk,k l m->bt', term_b, b_cmplx)
+            y += torch.einsum('blmtk,k l m->bt', term_b, self.b)
         if term_c is not None:
-            y += torch.einsum('blmtk,k l m->bt', term_c, c_cmplx)
+            y += torch.einsum('blmtk,k l m->bt', term_c, self.c)
 
         return torch.view_as_real(y)
