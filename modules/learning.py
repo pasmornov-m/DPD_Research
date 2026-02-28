@@ -1,7 +1,77 @@
+import os
+from pathlib import Path
+import pandas as pd
 import torch
 from torch import nn
-from modules import metrics, utils
+from modules import metrics, utils, data_loader
 
+
+class ILCSignal:
+    file_path = "ilc_signals"
+    def __init__(self, pa_model, epochs=100, learning_rate=0.1):
+        self.pa_model = pa_model
+        self.epochs = epochs
+        self.learning_rate = learning_rate
+        
+        self.uk_train = None
+        self.uk_val = None
+    
+    @staticmethod
+    def load_signal(file_path: str = file_path):
+        base_path = Path(file_path)
+        train_path = base_path / "uk_train.csv"
+        val_path = base_path / "uk_val.csv"
+
+        if not train_path.exists():
+            raise FileNotFoundError(f"{train_path} not found")
+        if not val_path.exists():
+            raise FileNotFoundError(f"{val_path} not found")
+
+        uk_train = data_loader.load_csv_to_tensor(str(train_path))
+        uk_val = data_loader.load_csv_to_tensor(str(val_path))
+
+        return uk_train, uk_val
+
+    def optimize(self, container):
+        self.uk_train = ilc_signal(container.train_input, 
+                                   container.train_output_target, 
+                                   self.pa_model, 
+                                   self.epochs, 
+                                   self.learning_rate)
+        self.uk_val = ilc_signal(container.val_input,
+                                 container.val_output_target, 
+                                 self.pa_model, 
+                                 self.epochs, 
+                                 self.learning_rate)
+    
+    def get_signals(self):
+        return self.uk_train, self.uk_val
+    
+    @staticmethod
+    def _tensor_to_dataframe(signal: torch.Tensor) -> pd.DataFrame:
+        signal = signal.detach().cpu()
+
+        if signal.is_complex():
+            I = signal.real.numpy()
+            Q = signal.imag.numpy()
+        else:
+            if signal.dim() != 2 or signal.size(1) != 2:
+                raise ValueError("Signal must be complex tensor or shape [N,2]")
+            I = signal[:, 0].numpy()
+            Q = signal[:, 1].numpy()
+
+        return pd.DataFrame({"I": I, "Q": Q})
+
+    def save_signals(self, folder_path: str = file_path):
+        os.makedirs(folder_path, exist_ok=True)
+
+        if self.uk_train is not None:
+            df_train = self._tensor_to_dataframe(self.uk_train)
+            df_train.to_csv(f"{folder_path}/uk_train.csv", index=False)
+
+        if self.uk_val is not None:
+            df_val = self._tensor_to_dataframe(self.uk_val)
+            df_val.to_csv(f"{folder_path}/uk_val.csv", index=False)
 
 @utils.timer_decorator
 def ilc_signal(input_data, target_data, pa_model, epochs=100, learning_rate=0.1):
@@ -19,7 +89,6 @@ def ilc_signal(input_data, target_data, pa_model, epochs=100, learning_rate=0.1)
         if epoch%100==0 or epoch == epochs - 1:
             print(f"Epoch [{epoch}/{epochs}], Loss: {loss.item()}")
     return u.detach()
-
 
 def net_train(net,
               dataloader,
@@ -164,21 +233,19 @@ class ModelTrainer:
         return avg_loss, avg_metric_loss
 
 
-def net_inference(net, x, deterministic=None, clip=False):
+def net_inference(net, x, model_type=None):
     is_complex = x.is_complex()
 
     if is_complex:
         x = utils.complex_to_iq(x)
     
     if x.dim() == 2:
-        x = x.unsqueeze(0)
-    
+        if model_type != "LEANN":
+            x = x.unsqueeze(0)
+
     net = net.eval()
     with torch.no_grad():
-        if deterministic:
-            result = net(x, deterministic=deterministic, clip=clip)
-        else:
-            result = net(x)
+        result = net(x)
     
     if result is None:
         return

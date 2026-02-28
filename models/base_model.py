@@ -9,7 +9,20 @@ class BaseModel:
         self._filename = None
     
     def count_params(self) -> int:
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+        total = 0
+
+        for p in self.parameters():
+            if not p.requires_grad:
+                continue
+
+            n = p.numel()
+
+            if p.is_complex():
+                total += 2 * n
+            else:
+                total += n
+
+        return total
     
     @property
     def filename(self):
