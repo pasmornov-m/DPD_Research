@@ -17,7 +17,8 @@ def load_csv_to_tensor(file_path: str) -> torch.Tensor:
     q_values = data['Q'].to_numpy(dtype='float32')
     i = torch.from_numpy(i_values)
     q = torch.from_numpy(q_values)
-    return torch.complex(i, q)
+    iq = torch.stack((i, q), dim=1)
+    return iq
 
 
 def load_data(file_path: str) -> Dict[str, Any]:
@@ -169,44 +170,54 @@ def build_dataloaders(container: DataContainer,
                       frame_length: int, 
                       batch_size: int, 
                       batch_size_eval: int, 
-                      arch: str | None = None):
+                      arch: str):
+    
+    input_norm = utils.Normalizer()
+    target_norm = utils.Normalizer()
     
     nperseg = container.nperseg
 
-    x_train = utils.complex_to_iq(container.train_input)
-    y_train = utils.complex_to_iq(container.train_output)
-    x_val = utils.complex_to_iq(container.val_input)
-    y_val = utils.complex_to_iq(container.val_output)
+    if arch == "pa":
+        x_train =container.train_input
+        y_train =container.train_output
+        x_val =container.val_input
+        y_val =container.val_output
     
-    if arch == "dla":
-        x_train = utils.complex_to_iq(container.train_input)
-        y_train = utils.complex_to_iq(container.train_output_target)
-        x_val = utils.complex_to_iq(container.val_input)
-        y_val = utils.complex_to_iq(container.val_output_target)
+    elif arch == "dla":
+        x_train =container.train_input
+        y_train =container.train_output_target
+        x_val =container.val_input
+        y_val =container.val_output_target
         
     elif arch == "ila":
-        x_train = utils.complex_to_iq(container.train_output) / container.gain
-        y_train = utils.complex_to_iq(container.train_input)
-        x_val = utils.complex_to_iq(container.val_output) / container.gain
-        y_val = utils.complex_to_iq(container.val_input)
+        x_train =container.train_output / container.gain
+        y_train =container.train_input
+        x_val =container.val_output / container.gain
+        y_val =container.val_input
     
     elif arch == "ilc":
-        x_train = utils.complex_to_iq(container.train_input)
-        y_train = utils.complex_to_iq(container.ilc_train_output)
-        x_val = utils.complex_to_iq(container.val_input)
+        x_train =container.train_input
+        y_train =container.ilc_train_output
+        x_val =container.val_input
         ilc_val_output = container.ilc_val_output
         if ilc_val_output is not None:
-            y_val = utils.complex_to_iq(ilc_val_output)
+            y_val =ilc_val_output
         else:
             y_val = y_train
+    
+    norm_x_train = input_norm.fit_transform(x_train)
+    norm_x_val = input_norm.transform(x_val)
+    
+    norm_y_train = target_norm.fit_transform(y_train)
+    norm_y_val = target_norm.transform(y_val)
 
-    train_set = IQDataset(x_train, y_train, nperseg=nperseg, frame_length=frame_length)
-    val_set = IQDataset(x_val, y_val, nperseg=nperseg, frame_length=None)
+    train_set = IQDataset(norm_x_train, norm_y_train, nperseg=nperseg, frame_length=frame_length)
+    val_set = IQDataset(norm_x_val, norm_y_val, nperseg=nperseg, frame_length=None)
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=batch_size_eval, shuffle=False)
 
-    return train_loader, val_loader
+    return train_loader, val_loader, input_norm, target_norm
 
 
 def build_X_in(iq_signal: torch.Tensor, M: int = 5, P: int = 4) -> torch.Tensor:
@@ -223,11 +234,7 @@ def build_X_in(iq_signal: torch.Tensor, M: int = 5, P: int = 4) -> torch.Tensor:
 
     T = M + 1
 
-    if iq_signal.is_complex():
-        I = iq_signal.real
-        Q = iq_signal.imag
-        amp = torch.abs(iq_signal + eps)
-    elif len(iq_signal.shape) == 2 and iq_signal.shape[-1] == 2:
+    if len(iq_signal.shape) == 2 and iq_signal.shape[-1] == 2:
         I = iq_signal[..., 0]
         Q = iq_signal[..., 1]
         amp = torch.sqrt(I**2 + Q**2) + eps
@@ -254,11 +261,7 @@ class RTDTNNDataset(torch.utils.data.Dataset):
         Y_out: (N-M, 2)
         """
         self.X = X_in
-
-        if Y_out.is_complex():
-            self.Y = utils.complex_to_iq(Y_out)
-        else:
-            self.Y = Y_out
+        self.Y = Y_out            
     
     def __len__(self):
         return self.X.shape[0]

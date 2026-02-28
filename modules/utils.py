@@ -208,3 +208,43 @@ class CascadeModel(nn.Module):
         #     x = x / self.gain
         x = self.model_2(x)
         return x
+
+
+class Normalizer:
+    def __init__(self, method="standard"):
+        """
+        Args:
+            method (str): 'minmax' для масштабирования в [0, 1], 
+                          'standard' для стандартизации (mean=0, std=1)
+        """
+        assert method in ("minmax", "standard"), "Метод должен быть 'minmax' или 'standard'"
+        self.method = method
+        self.params = {}
+
+    def fit(self, x: torch.Tensor):
+        """Рассчитывает параметры нормализации по тензору x"""
+        if self.method == "minmax":
+            self.params['min'] = x.min(dim=0, keepdim=True)[0]
+            self.params['max'] = x.max(dim=0, keepdim=True)[0]
+        else:  # standard
+            self.params['mean'] = x.mean(dim=0, keepdim=True)
+            self.params['std'] = x.std(dim=0, keepdim=True)
+
+    def transform(self, x: torch.Tensor) -> torch.Tensor:
+        """Применяет нормализацию к x"""
+        if self.method == "minmax":
+            return (x - self.params['min']) / (self.params['max'] - self.params['min'] + 1e-8)
+        else:   # standard
+            return (x - self.params['mean']) / (self.params['std'] + 1e-8)
+
+    def inverse_transform(self, x_norm: torch.Tensor) -> torch.Tensor:
+        """Денормализует x"""
+        if self.method == "minmax":
+            return x_norm * (self.params['max'] - self.params['min']) + self.params['min']
+        else:   # standard
+            return x_norm * self.params['std'] + self.params['mean']
+
+    def fit_transform(self, x: torch.Tensor) -> torch.Tensor:
+        """Комбинированный вызов fit + transform"""
+        self.fit(x)
+        return self.transform(x)
