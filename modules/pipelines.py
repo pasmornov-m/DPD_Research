@@ -1,12 +1,17 @@
-from modules import metrics, learning, params, data_loader, utils
-from modules.gmp_model import ClassicGMP, BatchGMP
-from modules.nn_model import GRU, LSTM, DenseNetRegressor, TCN, DiffESN, RTDTNN
-from modules.config import GMP_GRAD_CLIP_VAL, GMP_U_K_LR, GMP_U_K_EPOCHS, NN_FRAME_LENGTH, NN_BATCH_SIZE, NN_BATCH_SIZE_EVAL, NN_GRAD_CLIP_VAL, NN_U_K_LR, NN_U_K_EPOCHS
 import torch
 from torch import nn
 from typing import Dict, Type
 import time
 from datetime import timedelta
+from modules import metrics, learning, params, data_loader, utils
+# from modules.gmp_model import ClassicGMP, BatchGMP
+# from modules.nn_model import GRU, LSTM, DenseNetRegressor, TCN, DiffESN, RTDTNN
+from modules.config import GMP_GRAD_CLIP_VAL, GMP_U_K_LR, GMP_U_K_EPOCHS, NN_FRAME_LENGTH, NN_BATCH_SIZE, NN_BATCH_SIZE_EVAL, NN_GRAD_CLIP_VAL, NN_U_K_LR, NN_U_K_EPOCHS
+from models.gmp import GMP
+from models.lstm import LSTM
+from models.gru import GRU
+from models.rtdtnn import RTDTNN
+from models.leann import LEANN
 
 
 class SimplePipeline:
@@ -64,27 +69,15 @@ class SimplePipeline:
 
         self.model_params = builder(self.train_props)
 
-        if issubclass(self.base_model, ClassicGMP):
-            self.grad_clip_val = GMP_GRAD_CLIP_VAL
-            self.u_k_lr = GMP_U_K_LR
-            self.u_k_epochs = GMP_U_K_EPOCHS
-        else:
-            self.frame_length = NN_FRAME_LENGTH
-            self.batch_size = NN_BATCH_SIZE
-            self.batch_size_eval = NN_BATCH_SIZE_EVAL
-            self.grad_clip_val = NN_GRAD_CLIP_VAL
-            self.u_k_lr = NN_U_K_LR
-            self.u_k_epochs = NN_U_K_EPOCHS
+        self.frame_length = NN_FRAME_LENGTH
+        self.batch_size = NN_BATCH_SIZE
+        self.batch_size_eval = NN_BATCH_SIZE_EVAL
+        self.grad_clip_val = NN_GRAD_CLIP_VAL
+        self.u_k_lr = NN_U_K_LR
+        self.u_k_epochs = NN_U_K_EPOCHS
     
     def _prepare_loaders(self):
-        if issubclass(self.base_model, ClassicGMP):
-            self.pa_train_loader, self.pa_val_loader = ([(self.container.train_input, self.container.train_output)],
-                                                        [(self.container.val_input, self.container.val_output)])
-            self.dla_train_loader, self.dla_val_loader = ([(self.container.train_input, self.container.train_output_target)], 
-                                                          [(self.container.val_input, self.container.val_output_target)])
-            self.ila_train_loader, self.ila_val_loader = ([(self.container.train_input, self.container.train_input)], 
-                                                          [(self.container.val_input, self.container.val_input)])
-        elif issubclass(self.base_model, RTDTNN):
+        if issubclass(self.base_model, RTDTNN):
             self.pa_train_loader, self.pa_val_loader = data_loader.build_RTDTNN_dataloaders(self.container, 
                                                                                             batch_size=self.batch_size, 
                                                                                             batch_size_eval=self.batch_size_eval, 
@@ -107,7 +100,8 @@ class SimplePipeline:
             self.pa_train_loader, self.pa_val_loader = data_loader.build_dataloaders(container=self.container, 
                                                                            frame_length=self.frame_length, 
                                                                            batch_size=self.batch_size, 
-                                                                           batch_size_eval=self.batch_size_eval)
+                                                                           batch_size_eval=self.batch_size_eval,
+                                                                           arch="pa")
             self.dla_train_loader, self.dla_val_loader = data_loader.build_dataloaders(container=self.container, 
                                                                             frame_length=self.frame_length, 
                                                                             batch_size=self.batch_size, 
@@ -307,10 +301,14 @@ class SimplePipeline:
             
             self.evaluate_ilc_signal()
             
-            if issubclass(self.base_model, ClassicGMP):
-                self.ilc_train_loader = [(self.container.train_input, self.container.ilc_train_output)]
-                self.ilc_val_loader = self.ilc_train_loader
-            elif issubclass(self.base_model, RTDTNN):
+            if issubclass(self.base_model, RTDTNN):
+                self.ilc_train_loader, self.ilc_val_loader = data_loader.build_RTDTNN_dataloaders(self.container, 
+                                                                                batch_size=self.batch_size, 
+                                                                                batch_size_eval=self.batch_size_eval, 
+                                                                                M=self.train_props["M"], 
+                                                                                P=self.train_props["P"], 
+                                                                                arch="ilc")
+            elif issubclass(self.base_model, LEANN):
                 self.ilc_train_loader, self.ilc_val_loader = data_loader.build_RTDTNN_dataloaders(self.container, 
                                                                                 batch_size=self.batch_size, 
                                                                                 batch_size_eval=self.batch_size_eval, 
@@ -374,250 +372,250 @@ class SimplePipeline:
         
 
 
-class SnrPipeline:
-    def __init__(self,
-                 base_model: nn.Module,
-                 input_model_params: Dict,
-                 data_dict: Dict,
-                 snr_params: Dict):
+# class SnrPipeline:
+#     def __init__(self,
+#                  base_model: nn.Module,
+#                  input_model_params: Dict,
+#                  data_dict: Dict,
+#                  snr_params: Dict):
         
-        self.base_model = base_model
-        self.data_dict = data_dict
-        self.snr_params = snr_params
-        self.input_model_params = input_model_params
+#         self.base_model = base_model
+#         self.data_dict = data_dict
+#         self.snr_params = snr_params
+#         self.input_model_params = input_model_params
 
-        self.x_train = data_dict["train_input"]
-        self.y_train = data_dict["train_output"]
-        self.x_val = data_dict["val_input"]
-        self.y_val = data_dict["val_output"]
-        self.gain = metrics.calculate_gain_complex(self.x_train, self.y_train)
-        self.y_train_target = self.gain * self.x_train
-        self.y_val_target = self.gain * self.x_val
-        self.u_k_train = None
-        self.u_k_val = None
+#         self.x_train = data_dict["train_input"]
+#         self.y_train = data_dict["train_output"]
+#         self.x_val = data_dict["val_input"]
+#         self.y_val = data_dict["val_output"]
+#         self.gain = metrics.calculate_gain(self.x_train, self.y_train)
+#         self.y_train_target = self.gain * self.x_train
+#         self.y_val_target = self.gain * self.x_val
+#         self.u_k_train = None
+#         self.u_k_val = None
             
-        self.snr_range = snr_params["snr_range"]
-        self.num_realizations = snr_params["num_realizations"]
-        self.fs = snr_params["fs"]
-        self.bw_main_ch = snr_params["bw_main_ch"]
-        self.epochs = snr_params["epochs"]
-        self.lr = snr_params["learning_rate"]
-        self.acpr_meter = snr_params["acpr_meter"]
-        self.pa_model = snr_params["pa_model"]
-        self.gain = snr_params["gain"]
+#         self.snr_range = snr_params["snr_range"]
+#         self.num_realizations = snr_params["num_realizations"]
+#         self.fs = snr_params["fs"]
+#         self.bw_main_ch = snr_params["bw_main_ch"]
+#         self.epochs = snr_params["epochs"]
+#         self.lr = snr_params["learning_rate"]
+#         self.acpr_meter = snr_params["acpr_meter"]
+#         self.pa_model = snr_params["pa_model"]
+#         self.gain = snr_params["gain"]
         
-        self.results = {
-            "dla": {"nmse": [], "acpr_left": [], "acpr_right": []},
-            "ila": {"nmse": [], "acpr_left": [], "acpr_right": []},
-            "ilc": {"nmse": [], "acpr_left": [], "acpr_right": []},
-            "uk":  {"nmse": [], "acpr_left": [], "acpr_right": []},
-            "snr_range": self.snr_range,
-            "base_model": self.base_model
-        }
+#         self.results = {
+#             "dla": {"nmse": [], "acpr_left": [], "acpr_right": []},
+#             "ila": {"nmse": [], "acpr_left": [], "acpr_right": []},
+#             "ilc": {"nmse": [], "acpr_left": [], "acpr_right": []},
+#             "uk":  {"nmse": [], "acpr_left": [], "acpr_right": []},
+#             "snr_range": self.snr_range,
+#             "base_model": self.base_model
+#         }
         
-        self.criterion = metrics.compute_mse
-        self.metric_criterion = metrics.compute_nmse
+#         self.criterion = metrics.compute_mse
+#         self.metric_criterion = metrics.compute_nmse
         
-        self.frame_length = None
-        self.batch_size = None
-        self.batch_size_eval = None
-        self.grad_clip_val = None
-        self.u_k_lr = None
-        self.u_k_epochs = None
+#         self.frame_length = None
+#         self.batch_size = None
+#         self.batch_size_eval = None
+#         self.grad_clip_val = None
+#         self.u_k_lr = None
+#         self.u_k_epochs = None
         
-        self.dla_train_loader = None
-        self.dla_val_loader = None
-        self.ila_train_loader = None
-        self.ila_val_loader = None
-        self.ilc_train_loader = None
-        self.ilc_val_loader = None
+#         self.dla_train_loader = None
+#         self.dla_val_loader = None
+#         self.ila_train_loader = None
+#         self.ila_val_loader = None
+#         self.ilc_train_loader = None
+#         self.ilc_val_loader = None
 
-        self._prepare_params()
-        self._prepare_loaders()
+#         self._prepare_params()
+#         self._prepare_loaders()
     
-    def _prepare_params(self):
-        if issubclass(self.base_model, (ClassicGMP, BatchGMP)):
-            self.model_params = params.make_gmp_params(Ka=self.input_model_params["gmp_degree"],
-                                                       La=self.input_model_params["gmp_degree"],
-                                                       Kb=self.input_model_params["gmp_degree"],
-                                                       Lb=self.input_model_params["gmp_degree"],
-                                                       Mb=self.input_model_params["gmp_degree"],
-                                                       Kc=self.input_model_params["gmp_degree"],
-                                                       Lc=self.input_model_params["gmp_degree"],
-                                                       Mc=self.input_model_params["gmp_degree"])
-        else:
-            self.model_params = {"hidden_size": self.input_model_params["hidden_size"], 
-                                 "num_layers": self.input_model_params["num_layers"]}
-            self.frame_length = NN_FRAME_LENGTH
-            self.batch_size = NN_BATCH_SIZE
-            self.batch_size_eval = NN_BATCH_SIZE_EVAL
-            self.grad_clip_val = NN_GRAD_CLIP_VAL
-            self.u_k_lr = NN_U_K_LR
-            self.u_k_epochs = NN_U_K_EPOCHS
+#     def _prepare_params(self):
+#         if issubclass(self.base_model, (ClassicGMP, BatchGMP)):
+#             self.model_params = params.make_gmp_params(Ka=self.input_model_params["gmp_degree"],
+#                                                        La=self.input_model_params["gmp_degree"],
+#                                                        Kb=self.input_model_params["gmp_degree"],
+#                                                        Lb=self.input_model_params["gmp_degree"],
+#                                                        Mb=self.input_model_params["gmp_degree"],
+#                                                        Kc=self.input_model_params["gmp_degree"],
+#                                                        Lc=self.input_model_params["gmp_degree"],
+#                                                        Mc=self.input_model_params["gmp_degree"])
+#         else:
+#             self.model_params = {"hidden_size": self.input_model_params["hidden_size"], 
+#                                  "num_layers": self.input_model_params["num_layers"]}
+#             self.frame_length = NN_FRAME_LENGTH
+#             self.batch_size = NN_BATCH_SIZE
+#             self.batch_size_eval = NN_BATCH_SIZE_EVAL
+#             self.grad_clip_val = NN_GRAD_CLIP_VAL
+#             self.u_k_lr = NN_U_K_LR
+#             self.u_k_epochs = NN_U_K_EPOCHS
         
-        if issubclass(self.base_model, ClassicGMP):
-            self.grad_clip_val = GMP_GRAD_CLIP_VAL
-            self.u_k_lr = GMP_U_K_LR
-            self.u_k_epochs = GMP_U_K_EPOCHS
-        else:
-            self.frame_length = NN_FRAME_LENGTH
-            self.batch_size = NN_BATCH_SIZE
-            self.batch_size_eval = NN_BATCH_SIZE_EVAL
-            self.grad_clip_val = NN_GRAD_CLIP_VAL
-            self.u_k_lr = NN_U_K_LR
-            self.u_k_epochs = NN_U_K_EPOCHS
+#         if issubclass(self.base_model, ClassicGMP):
+#             self.grad_clip_val = GMP_GRAD_CLIP_VAL
+#             self.u_k_lr = GMP_U_K_LR
+#             self.u_k_epochs = GMP_U_K_EPOCHS
+#         else:
+#             self.frame_length = NN_FRAME_LENGTH
+#             self.batch_size = NN_BATCH_SIZE
+#             self.batch_size_eval = NN_BATCH_SIZE_EVAL
+#             self.grad_clip_val = NN_GRAD_CLIP_VAL
+#             self.u_k_lr = NN_U_K_LR
+#             self.u_k_epochs = NN_U_K_EPOCHS
     
-    def _prepare_loaders(self):
-        if issubclass(self.base_model, ClassicGMP):
-            self.dla_train_loader = [(self.x_train, self.y_train_target)]
-            self.dla_val_loader = [(self.x_val, self.y_val_target)]
-            self.ila_train_loader = [(self.x_train, self.x_train)]
-            self.ila_val_loader = [(self.x_val, self.x_val)]
-        else:
-            self.dla_train_loader, self.dla_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
-                                                                            frame_length=self.frame_length, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                            arch="dla")
-            self.ila_train_loader, self.ila_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
-                                                                            frame_length=self.frame_length, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                            arch="ila")
+#     def _prepare_loaders(self):
+#         if issubclass(self.base_model, ClassicGMP):
+#             self.dla_train_loader = [(self.x_train, self.y_train_target)]
+#             self.dla_val_loader = [(self.x_val, self.y_val_target)]
+#             self.ila_train_loader = [(self.x_train, self.x_train)]
+#             self.ila_val_loader = [(self.x_val, self.x_val)]
+#         else:
+#             self.dla_train_loader, self.dla_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+#                                                                             frame_length=self.frame_length, 
+#                                                                             batch_size=self.batch_size, 
+#                                                                             batch_size_eval=self.batch_size_eval, 
+#                                                                             arch="dla")
+#             self.ila_train_loader, self.ila_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+#                                                                             frame_length=self.frame_length, 
+#                                                                             batch_size=self.batch_size, 
+#                                                                             batch_size_eval=self.batch_size_eval, 
+#                                                                             arch="ila")
 
-    def _build_optimizer(self, model):
-        return torch.optim.AdamW(model.parameters(), lr=self.lr)
+#     def _build_optimizer(self, model):
+#         return torch.optim.AdamW(model.parameters(), lr=self.lr)
     
-    def _build_scheduler(self, optimizer):
-        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
+#     def _build_scheduler(self, optimizer):
+#         return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
     
-    def _create_pa_noise_cascade(self, snr):
-        noise_gen_model = utils.NoiseModel(snr=snr, fs=self.fs, bw=self.bw_main_ch)
-        casc_pa_noise = utils.CascadeModel(model_1=self.pa_model, model_2=noise_gen_model)
-        return casc_pa_noise
+#     def _create_pa_noise_cascade(self, snr):
+#         noise_gen_model = utils.NoiseModel(snr=snr, fs=self.fs, bw=self.bw_main_ch)
+#         casc_pa_noise = utils.CascadeModel(model_1=self.pa_model, model_2=noise_gen_model)
+#         return casc_pa_noise
     
-    def run_dla_noise(self):
-        for snr in self.snr_range:
-            print(f"SNR: {snr}")
-            dpd_model = self.base_model(**self.model_params)
-            casc_pa_noise = self._create_pa_noise_cascade(snr)
-            casc_dla = utils.CascadeModel(model_1=dpd_model, 
-                                            model_2=casc_pa_noise)
-            optimizer = self._build_optimizer(casc_dla)
-            scheduler = self._build_scheduler(optimizer)
+#     def run_dla_noise(self):
+#         for snr in self.snr_range:
+#             print(f"SNR: {snr}")
+#             dpd_model = self.base_model(**self.model_params)
+#             casc_pa_noise = self._create_pa_noise_cascade(snr)
+#             casc_dla = utils.CascadeModel(model_1=dpd_model, 
+#                                             model_2=casc_pa_noise)
+#             optimizer = self._build_optimizer(casc_dla)
+#             scheduler = self._build_scheduler(optimizer)
 
-            learning.train(net=casc_dla, 
-                        criterion=self.criterion, 
-                        optimizer=optimizer, 
-                        train_loader=self.dla_train_loader, 
-                        val_loader=self.dla_val_loader, 
-                        grad_clip_val=self.grad_clip_val, 
-                        n_epochs=self.epochs, 
-                        metric_criterion=self.metric_criterion,
-                        scheduler=scheduler)
+#             learning.train(net=casc_dla, 
+#                         criterion=self.criterion, 
+#                         optimizer=optimizer, 
+#                         train_loader=self.dla_train_loader, 
+#                         val_loader=self.dla_val_loader, 
+#                         grad_clip_val=self.grad_clip_val, 
+#                         n_epochs=self.epochs, 
+#                         metric_criterion=self.metric_criterion,
+#                         scheduler=scheduler)
 
-            nmse, acpr_left, acpr_right = metrics.noise_realizations(self.num_realizations, 
-                                                            model=casc_dla, 
-                                                            x=self.x_val, 
-                                                            y_target=self.y_val_target, 
-                                                            acpr_meter=self.acpr_meter)
-            self.results["dla"]["nmse"].append(nmse.item())
-            self.results["dla"]["acpr_left"].append(acpr_left)
-            self.results["dla"]["acpr_right"].append(acpr_right)
+#             nmse, acpr_left, acpr_right = metrics.noise_realizations(self.num_realizations, 
+#                                                             model=casc_dla, 
+#                                                             x=self.x_val, 
+#                                                             y_target=self.y_val_target, 
+#                                                             acpr_meter=self.acpr_meter)
+#             self.results["dla"]["nmse"].append(nmse.item())
+#             self.results["dla"]["acpr_left"].append(acpr_left)
+#             self.results["dla"]["acpr_right"].append(acpr_right)
 
         
-    def run_ila_noise(self):
+#     def run_ila_noise(self):
         
-        for snr in self.snr_range:
-            print(f"SNR: {snr}")
-            dpd_model = self.base_model(**self.model_params)
-            casc_pa_noise = self._create_pa_noise_cascade(snr)
-            casc_ila_train = utils.CascadeModel(model_1=casc_pa_noise, model_2=dpd_model, gain=self.gain, cascade_type="ila")
-            casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=casc_pa_noise)
-            optimizer = self._build_optimizer(casc_ila_train)
-            scheduler = self._build_scheduler(optimizer)
+#         for snr in self.snr_range:
+#             print(f"SNR: {snr}")
+#             dpd_model = self.base_model(**self.model_params)
+#             casc_pa_noise = self._create_pa_noise_cascade(snr)
+#             casc_ila_train = utils.CascadeModel(model_1=casc_pa_noise, model_2=dpd_model, gain=self.gain, cascade_type="ila")
+#             casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=casc_pa_noise)
+#             optimizer = self._build_optimizer(casc_ila_train)
+#             scheduler = self._build_scheduler(optimizer)
 
-            learning.train(net=casc_ila_train, 
-                        criterion=self.criterion, 
-                        optimizer=optimizer, 
-                        train_loader=self.ila_train_loader, 
-                        val_loader=self.ila_val_loader, 
-                        grad_clip_val=self.grad_clip_val, 
-                        n_epochs=self.epochs, 
-                        metric_criterion=self.metric_criterion,
-                        scheduler=scheduler)
+#             learning.train(net=casc_ila_train, 
+#                         criterion=self.criterion, 
+#                         optimizer=optimizer, 
+#                         train_loader=self.ila_train_loader, 
+#                         val_loader=self.ila_val_loader, 
+#                         grad_clip_val=self.grad_clip_val, 
+#                         n_epochs=self.epochs, 
+#                         metric_criterion=self.metric_criterion,
+#                         scheduler=scheduler)
 
-            nmse, acpr_left, acpr_right = metrics.noise_realizations(self.num_realizations, 
-                                                            model=casc_ila_eval, 
-                                                            x=self.x_val, 
-                                                            y_target=self.y_val_target, 
-                                                            acpr_meter=self.acpr_meter)
-            self.results["ila"]["nmse"].append(nmse.item())
-            self.results["ila"]["acpr_left"].append(acpr_left)
-            self.results["ila"]["acpr_right"].append(acpr_right)
+#             nmse, acpr_left, acpr_right = metrics.noise_realizations(self.num_realizations, 
+#                                                             model=casc_ila_eval, 
+#                                                             x=self.x_val, 
+#                                                             y_target=self.y_val_target, 
+#                                                             acpr_meter=self.acpr_meter)
+#             self.results["ila"]["nmse"].append(nmse.item())
+#             self.results["ila"]["acpr_left"].append(acpr_left)
+#             self.results["ila"]["acpr_right"].append(acpr_right)
 
     
-    def run_ilc_noise(self):
+#     def run_ilc_noise(self):
         
-        for snr in self.snr_range:
-            print(f"SNR: {snr}")
-            casc_pa_noise = self._create_pa_noise_cascade(snr)
+#         for snr in self.snr_range:
+#             print(f"SNR: {snr}")
+#             casc_pa_noise = self._create_pa_noise_cascade(snr)
             
-            self.u_k_train = learning.ilc_signal(self.x_train, self.y_train_target, casc_pa_noise, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
-            # self.u_k_val = learning.ilc_signal(self.x_val, self.y_val_target, casc_pa_noise, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
+#             self.u_k_train = learning.ilc_signal(self.x_train, self.y_train_target, casc_pa_noise, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
+#             # self.u_k_val = learning.ilc_signal(self.x_val, self.y_val_target, casc_pa_noise, epochs=self.u_k_epochs, learning_rate=self.u_k_lr)
 
-            self.data_dict["ilc_train_output"] = self.u_k_train
-            # self.data_dict["ilc_val_output"] = self.u_k_val
+#             self.data_dict["ilc_train_output"] = self.u_k_train
+#             # self.data_dict["ilc_val_output"] = self.u_k_val
             
-            if issubclass(self.base_model, ClassicGMP):
-                self.ilc_train_loader = [(self.x_train, self.u_k_train)]
-                # self.ilc_val_loader = [(self.x_val, self.u_k_val)]
-                self.ilc_val_loader = self.ilc_train_loader
-            else:
-                self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
-                                                                                frame_length=self.frame_length, 
-                                                                                batch_size=self.batch_size, 
-                                                                                batch_size_eval=self.batch_size_eval, 
-                                                                                arch="ilc")
+#             if issubclass(self.base_model, ClassicGMP):
+#                 self.ilc_train_loader = [(self.x_train, self.u_k_train)]
+#                 # self.ilc_val_loader = [(self.x_val, self.u_k_val)]
+#                 self.ilc_val_loader = self.ilc_train_loader
+#             else:
+#                 self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(data_dict=self.data_dict, 
+#                                                                                 frame_length=self.frame_length, 
+#                                                                                 batch_size=self.batch_size, 
+#                                                                                 batch_size_eval=self.batch_size_eval, 
+#                                                                                 arch="ilc")
 
-            nmse_uk, acpr_left_uk, acpr_right_uk = metrics.noise_realizations(self.num_realizations, 
-                                                                    model=casc_pa_noise, 
-                                                                    x=self.u_k_train, 
-                                                                    y_target=self.y_train_target, 
-                                                                    acpr_meter=self.acpr_meter)
-            self.results["uk"]["nmse"].append(nmse_uk.item())
-            self.results["uk"]["acpr_left"].append(acpr_left_uk)
-            self.results["uk"]["acpr_right"].append(acpr_right_uk)
+#             nmse_uk, acpr_left_uk, acpr_right_uk = metrics.noise_realizations(self.num_realizations, 
+#                                                                     model=casc_pa_noise, 
+#                                                                     x=self.u_k_train, 
+#                                                                     y_target=self.y_train_target, 
+#                                                                     acpr_meter=self.acpr_meter)
+#             self.results["uk"]["nmse"].append(nmse_uk.item())
+#             self.results["uk"]["acpr_left"].append(acpr_left_uk)
+#             self.results["uk"]["acpr_right"].append(acpr_right_uk)
 
-            dpd_model = self.base_model(**self.model_params)
-            optimizer = self._build_optimizer(dpd_model)
-            scheduler = self._build_scheduler(optimizer)
+#             dpd_model = self.base_model(**self.model_params)
+#             optimizer = self._build_optimizer(dpd_model)
+#             scheduler = self._build_scheduler(optimizer)
             
-            learning.train(net=dpd_model, 
-                        criterion=self.criterion, 
-                        optimizer=optimizer, 
-                        train_loader=self.ilc_train_loader, 
-                        val_loader=self.ilc_val_loader, 
-                        grad_clip_val=self.grad_clip_val, 
-                        n_epochs=self.epochs, 
-                        metric_criterion=self.metric_criterion,
-                        scheduler=scheduler)
+#             learning.train(net=dpd_model, 
+#                         criterion=self.criterion, 
+#                         optimizer=optimizer, 
+#                         train_loader=self.ilc_train_loader, 
+#                         val_loader=self.ilc_val_loader, 
+#                         grad_clip_val=self.grad_clip_val, 
+#                         n_epochs=self.epochs, 
+#                         metric_criterion=self.metric_criterion,
+#                         scheduler=scheduler)
 
-            casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
-            nmse, acpr_left, acpr_right = metrics.noise_realizations(self.num_realizations, 
-                                                            model=casc_ilc_eval, 
-                                                            x=self.x_val, 
-                                                            y_target=self.y_val_target, 
-                                                            acpr_meter=self.acpr_meter)
-            self.results["ilc"]["nmse"].append(nmse.item())
-            self.results["ilc"]["acpr_left"].append(acpr_left)
-            self.results["ilc"]["acpr_right"].append(acpr_right)
+#             casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=casc_pa_noise, cascade_type="dla")
+#             nmse, acpr_left, acpr_right = metrics.noise_realizations(self.num_realizations, 
+#                                                             model=casc_ilc_eval, 
+#                                                             x=self.x_val, 
+#                                                             y_target=self.y_val_target, 
+#                                                             acpr_meter=self.acpr_meter)
+#             self.results["ilc"]["nmse"].append(nmse.item())
+#             self.results["ilc"]["acpr_left"].append(acpr_left)
+#             self.results["ilc"]["acpr_right"].append(acpr_right)
 
     
-    def run(self):
-        self.run_dla_noise()
-        self.run_ila_noise()
-        self.run_ilc_noise()
+#     def run(self):
+#         self.run_dla_noise()
+#         self.run_ila_noise()
+#         self.run_ilc_noise()
     
-    def get_results(self):
-        return self.results
+#     def get_results(self):
+#         return self.results

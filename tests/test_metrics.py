@@ -4,7 +4,7 @@ import numpy as np
 from modules.metrics import (
     compute_mse, compute_nmse,
     calculate_am_am, calculate_am_pm,
-    get_amplitude, calculate_gain_complex,
+    get_amplitude, calculate_gain,
     compute_signal_power, power_spectrum,
     calculate_acpr, add_complex_noise,
     noise_realizations, ACPR
@@ -109,7 +109,7 @@ def test_get_amplitude_correctness():
 def test_calculate_gain_complex():
     x = torch.tensor([1+1j, 2+2j], dtype=torch.complex64)
     y = 2 * x
-    gain = calculate_gain_complex(x, y)
+    gain = calculate_gain(x, y)
     assert gain.item() == pytest.approx(2.0, rel=1e-3)
 
 

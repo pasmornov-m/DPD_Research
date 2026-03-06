@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from scipy.signal import welch, get_window, lfilter
+from modules import utils
 from modules.utils import to_torch_tensor, iq_to_complex, moving_average
 from typing import Tuple
 
@@ -83,7 +84,7 @@ def get_amplitude(data: torch.Tensor) -> torch.Tensor:
     return amplitude
 
 
-def calculate_gain_complex(input_data: torch.Tensor, output_data: torch.Tensor) -> torch.Tensor:
+def calculate_gain(input_data: torch.Tensor, output_data: torch.Tensor) -> torch.Tensor:
     assert input_data.shape == output_data.shape, "input_data and output_data must have the same shape"
     if not input_data.is_complex():
         input_data = iq_to_complex(input_data)
@@ -101,6 +102,7 @@ def compute_signal_power(signal: torch.Tensor) -> torch.Tensor:
 
 
 def power_spectrum(input_data, fs, nperseg, window_size=None):
+    input_data = iq_to_complex(input_data)
     if isinstance(input_data, torch.Tensor):
         input_data = input_data.detach().cpu().numpy()
     _, spectrum = welch(input_data, fs=fs, nperseg=nperseg)
@@ -111,8 +113,8 @@ def power_spectrum(input_data, fs, nperseg, window_size=None):
     spectrum_db = 10 * np.log10(np.abs(spectrum))
     return freqs, spectrum_db
 
-
 def calculate_acpr(input_data, acpr_meter):
+    input_data = iq_to_complex(input_data)
     acpr_vals, main_pw, adj_pw = acpr_meter(input_data)
     return acpr_vals
 

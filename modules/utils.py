@@ -97,6 +97,7 @@ def complex_handler(forward_func):
         if is_complex:
             inputs = complex_to_iq(inputs)
             inputs = inputs.unsqueeze(0)
+            
         if add_batch_dim:
             inputs = inputs.unsqueeze(0)
         
@@ -108,6 +109,7 @@ def complex_handler(forward_func):
         if is_complex:
             result = torch.squeeze(result)
             result = iq_to_complex(result)
+            
         if add_batch_dim:
             result = result.squeeze(0)
         
@@ -191,22 +193,27 @@ class NoiseModel():
 
 
 class CascadeModel(nn.Module):
-    def __init__(self, model_1, model_2, gain=None, cascade_type=None):
+    def __init__(self, model_1, model_2, gain=None, cascade_type=None, normalizer=None):
         super().__init__()
         self.model_1 = model_1
         self.model_2 = model_2
         self.gain = gain
         self.cascade_type = cascade_type
+        self.normalizer = normalizer
 
     def forward(self, x, deterministic=None):
         if deterministic:
             x = self.model_1(x, deterministic=True)
         else:
             x = self.model_1(x)
+        
+        if self.normalizer:
+            x = self.normalizer.inverse_transform(x)
             
         # if self.cascade_type == "ila" and self.gain:
         #     x = x / self.gain
         x = self.model_2(x)
+        
         return x
 
 
