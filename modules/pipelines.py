@@ -4,9 +4,7 @@ from typing import Dict, Type
 import time
 from datetime import timedelta
 from modules import metrics, learning, params, data_loader, utils
-# from modules.gmp_model import ClassicGMP, BatchGMP
-# from modules.nn_model import GRU, LSTM, DenseNetRegressor, TCN, DiffESN, RTDTNN
-from modules.config import GMP_GRAD_CLIP_VAL, GMP_U_K_LR, GMP_U_K_EPOCHS, NN_FRAME_LENGTH, NN_BATCH_SIZE, NN_BATCH_SIZE_EVAL, NN_GRAD_CLIP_VAL, NN_U_K_LR, NN_U_K_EPOCHS
+from modules.config import FRAME_LENGTH, BATCH_SIZE, BATCH_SIZE_EVAL, GRAD_CLIP_VAL, U_K_LR, U_K_EPOCHS
 from models.gmp import GMP
 from models.lstm import LSTM
 from models.gru import GRU
@@ -51,12 +49,20 @@ class SimplePipeline:
         
         self.pa_train_loader = None
         self.pa_val_loader = None
+        self.pa_input_norm = None
+        self.pa_target_norm = None
         self.dla_train_loader = None
         self.dla_val_loader = None
+        self.dla_input_norm = None
+        self.dla_target_norm = None
         self.ila_train_loader = None
         self.ila_val_loader = None
+        self.ila_input_norm = None
+        self.ila_target_norm = None
         self.ilc_train_loader = None
         self.ilc_val_loader = None
+        self.ilc_input_norm = None
+        self.ilc_target_norm = None
         
         self._prepare_params()
         self._prepare_loaders()
@@ -69,12 +75,12 @@ class SimplePipeline:
 
         self.model_params = builder(self.train_props)
 
-        self.frame_length = NN_FRAME_LENGTH
-        self.batch_size = NN_BATCH_SIZE
-        self.batch_size_eval = NN_BATCH_SIZE_EVAL
-        self.grad_clip_val = NN_GRAD_CLIP_VAL
-        self.u_k_lr = NN_U_K_LR
-        self.u_k_epochs = NN_U_K_EPOCHS
+        self.frame_length = FRAME_LENGTH
+        self.batch_size = BATCH_SIZE
+        self.batch_size_eval = BATCH_SIZE_EVAL
+        self.grad_clip_val = GRAD_CLIP_VAL
+        self.u_k_lr = U_K_LR
+        self.u_k_epochs = U_K_EPOCHS
     
     def _prepare_loaders(self):
         if issubclass(self.base_model, RTDTNN):
@@ -95,6 +101,22 @@ class SimplePipeline:
                                                                                             batch_size_eval=self.batch_size_eval, 
                                                                                             M=self.train_props["M"], 
                                                                                             P=self.train_props["P"], 
+                                                                                            arch="ila")
+        elif issubclass(self.base_model, LEANN):
+            self.pa_train_loader, self.pa_val_loader, self.pa_input_norm, self.pa_target_norm = data_loader.build_LEANN_dataloaders(self.container, 
+                                                                                            batch_size=self.batch_size, 
+                                                                                            batch_size_eval=self.batch_size_eval, 
+                                                                                            M=self.train_props["M"], 
+                                                                                            arch="pa")
+            self.dla_train_loader, self.dla_val_loader, self.dla_input_norm, self.dla_target_norm = data_loader.build_LEANN_dataloaders(self.container, 
+                                                                                            batch_size=self.batch_size, 
+                                                                                            batch_size_eval=self.batch_size_eval, 
+                                                                                            M=self.train_props["M"], 
+                                                                                            arch="dla")
+            self.ila_train_loader, self.ila_val_loader, self.ila_input_norm, self.ila_target_norm = data_loader.build_LEANN_dataloaders(self.container, 
+                                                                                            batch_size=self.batch_size, 
+                                                                                            batch_size_eval=self.batch_size_eval, 
+                                                                                            M=self.train_props["M"], 
                                                                                             arch="ila")
         else:
             self.pa_train_loader, self.pa_val_loader = data_loader.build_dataloaders(container=self.container, 
@@ -143,17 +165,13 @@ class SimplePipeline:
             elapsed = time.time() - start
             time_train = timedelta(seconds=round(elapsed))
             self.pa_model.save_weights()
-        utils.freeze_pa_model(self.pa_model)
+        utils.freeze_pa_model(self.pa_model)        
         
-        if issubclass(self.base_model, RTDTNN):
-            x_val = data_loader.build_X_in(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props["P"])
-        else:
-            x_val = self.container.val_input
-
-        y_val_pa_model = learning.net_inference(net=self.pa_model, x=x_val)
+        y_val_pa_model = learning.net_inference(net=self.pa_model, x=self.container.val_input)
+        
         pa_model_nmse = metrics.compute_nmse(y_val_pa_model, self.container.val_output)
         pa_model_acpr = metrics.calculate_acpr(y_val_pa_model, self.acpr_meter)
-        print(f"[PA] NMSE: {pa_model_nmse:.2f}, ACPR: {pa_model_acpr}")
+        print(f"[PA] NMSE: {pa_model_nmse:.2f}, ACPR: {pa_model_acpr[0]:.2f} {pa_model_acpr[1]:.2f}")
         self.results["pa"] = {
             "nmse": pa_model_nmse.item(),
             "acpr": pa_model_acpr,
@@ -197,7 +215,7 @@ class SimplePipeline:
         y_val_dla = learning.net_inference(net=casc_dla, x=x_val)
         dla_nmse = metrics.compute_nmse(y_val_dla, self.container.val_output_target)
         dla_acpr = metrics.calculate_acpr(y_val_dla, self.acpr_meter)
-        print(f"[DLA] NMSE: {dla_nmse:.2f}, ACPR: {dla_acpr}, count_params: {count_params}")
+        print(f"[DLA] NMSE: {dla_nmse:.2f}, ACPR: {dla_acpr[0]:.2f} {dla_acpr[1]:.2f}, count_params: {count_params}")
 
         self.results["dla"] = {
             "nmse": dla_nmse.item(),
@@ -242,7 +260,7 @@ class SimplePipeline:
         y_val_ila = learning.net_inference(net=casc_ila_eval, x=x_val)
         ila_nmse = metrics.compute_nmse(y_val_ila, self.container.val_output_target)
         ila_acpr = metrics.calculate_acpr(y_val_ila, self.acpr_meter)
-        print(f"[ILA] NMSE: {ila_nmse:.2f}, ACPR: {ila_acpr}, count_params: {count_params}")
+        print(f"[ILA] NMSE: {ila_nmse:.2f}, ACPR: {ila_acpr[0]:.2f} {ila_acpr[1]:.2f}, count_params: {count_params}")
 
         self.results["ila"] = {
             "nmse": ila_nmse.item(),
@@ -276,7 +294,7 @@ class SimplePipeline:
 
         ilc_nmse_uk = metrics.compute_nmse(self.u_k_pa, self.container.train_output_target)
         ilc_acpr_uk = metrics.calculate_acpr(self.u_k_pa, self.acpr_meter)
-        print(f"[UK] NMSE: {ilc_nmse_uk:.2f}, ACPR: {ilc_acpr_uk}")
+        print(f"[UK] NMSE: {ilc_nmse_uk:.2f}, ACPR: {ilc_acpr_uk[0]:.2f} {ilc_acpr_uk[1]:.2f}")
 
         self.results["uk"] = {
             "nmse": ilc_nmse_uk.item(),
@@ -296,6 +314,8 @@ class SimplePipeline:
         optimizer = self._build_optimizer(dpd_model)
         scheduler = self._build_scheduler(optimizer)
         
+        use_normalize = self.ilc_input_norm and self.ilc_target_norm
+        
         time_train = 0
         if not is_load:
             
@@ -309,11 +329,10 @@ class SimplePipeline:
                                                                                 P=self.train_props["P"], 
                                                                                 arch="ilc")
             elif issubclass(self.base_model, LEANN):
-                self.ilc_train_loader, self.ilc_val_loader = data_loader.build_RTDTNN_dataloaders(self.container, 
+                self.ilc_train_loader, self.ilc_val_loader, self.ilc_input_norm, self.ilc_target_norm = data_loader.build_LEANN_dataloaders(self.container, 
                                                                                 batch_size=self.batch_size, 
                                                                                 batch_size_eval=self.batch_size_eval, 
                                                                                 M=self.train_props["M"], 
-                                                                                P=self.train_props["P"], 
                                                                                 arch="ilc")
             else:
                 self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(container=self.container, 
@@ -336,15 +355,27 @@ class SimplePipeline:
             time_train = timedelta(seconds=round(elapsed))
             dpd_model.save_weights()
 
-        casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
-        if issubclass(self.base_model, RTDTNN):
-            x_val = data_loader.build_X_in(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props["P"])
+        if use_normalize:
+            x_val = self.ilc_input_norm.transform(self.container.val_input_orig)
         else:
-            x_val = self.container.val_input
-        y_val_ilc = learning.net_inference(net=casc_ilc_eval, x=x_val)
+            x_val = self.container.val_input_orig
+            
+        if issubclass(self.base_model, RTDTNN):
+            x_val = data_loader.build_X_in(x_val, M=self.train_props["M"], P=self.train_props["P"])
+        elif issubclass(self.base_model, LEANN):
+            x_val = data_loader.build_LEANN_features(x_val, M=self.train_props["M"])
+        
+        if use_normalize:
+            casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model, normalizer=self.ilc_target_norm)
+        else:
+            casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
+        if issubclass(self.base_model, LEANN):
+            y_val_ilc = learning.net_inference(net=casc_ilc_eval, x=x_val, model_type="LEANN")
+        else:
+            y_val_ilc = learning.net_inference(net=casc_ilc_eval, x=x_val)
         ilc_nmse = metrics.compute_nmse(y_val_ilc, self.container.val_output_target)
         ilc_acpr = metrics.calculate_acpr(y_val_ilc, self.acpr_meter)
-        print(f"[ILC] NMSE: {ilc_nmse:.2f}, ACPR: {ilc_acpr}, count_params: {count_params}")
+        print(f"[ILC] NMSE: {ilc_nmse:.2f}, ACPR: {ilc_acpr[0]:.2f} {ilc_acpr[1]:.2f}, count_params: {count_params}")
 
         self.results["ilc"] = {
             "nmse": ilc_nmse.item(),

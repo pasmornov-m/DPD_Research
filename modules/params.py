@@ -5,6 +5,7 @@ from models.gmp import GMP
 from models.gru import GRU
 from models.lstm import LSTM
 from models.rtdtnn import RTDTNN
+from models.leann import LEANN
 
 
 @dataclass
@@ -105,5 +106,12 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
         "n_heads": tp["n_heads"],
         "d_ff": tp["d_ff"],
         "n_fc": tp["n_fc"],
+    },
+    
+    LEANN: lambda tp: {
+        "M": tp["M"],
+        "L2": tp["L2"],
+        "L3": tp["L3"],
+        "K": tp["K"],
     },
 }
