@@ -1,6 +1,5 @@
 matplotlib==3.10.8
 numpy==2.4.1
-pandas==3.0.0
 pytest==8.4.1
 pytorch_tcn==1.2.3
 scipy==1.17.0
