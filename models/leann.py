@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 from models.base_model import BaseModel
 from modules import utils
 
@@ -10,6 +9,7 @@ class LEANN(BaseModel, torch.nn.Module):
                  L2: int, 
                  L3: int,
                  K: int, 
+                 L1: int = 2,
                  model_name: str = ""):
         
         torch.nn.Module.__init__(self)
@@ -19,7 +19,7 @@ class LEANN(BaseModel, torch.nn.Module):
         self.L2 = L2
         self.L3 = L3
         self.K = K
-        self.L1 = 2
+        self.L1 = L1
         self._EPS = 1e-12
 
         self.fir = torch.nn.Linear(in_features=2*(self.M+1), 

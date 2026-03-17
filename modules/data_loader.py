@@ -1,5 +1,4 @@
 import torch
-from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import json
 from typing import Dict, Any, Callable
@@ -112,7 +111,7 @@ class DataContainer:
         self.u_k_val = None
 
 
-class IQDataset(Dataset):
+class IQDataset(torch.utils.data.Dataset):
     def __init__(self,
                  features: torch.Tensor,
                  targets: torch.Tensor,
@@ -220,8 +219,8 @@ def build_dataloaders(container: DataContainer,
     train_set = IQDataset(x_train, y_train, nperseg=nperseg, frame_length=frame_length)
     val_set = IQDataset(x_val, y_val, nperseg=nperseg, frame_length=None)
 
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=batch_size_eval, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(val_set, batch_size=batch_size_eval, shuffle=False)
 
     return train_loader, val_loader, input_norm, target_norm
 
@@ -306,50 +305,41 @@ def build_nn_dataloaders(container,
     assert arch in ('pa', 'dla', 'ila', 'ilc'), \
             "arch must be specified: 'pa', 'dla', 'ila' or 'ilc'"
     
-    if normalize_method:
-        input_norm = utils.Normalizer(normalize_method)
-        target_norm = utils.Normalizer(normalize_method)
-    else:
-        input_norm = None
-        target_norm = None
+    input_norm = utils.Normalizer(normalize_method)
+    target_norm = utils.Normalizer(normalize_method)
     
-    if arch == "pa":
-        x_train = container.train_input_orig
-        x_val = container.val_input_orig
-        y_train = container.train_output
-        y_val = container.val_output
-    elif arch == "dla":
-        x_train = container.train_input_orig
-        x_val = container.val_input_orig
-        y_train = container.train_output_target
-        y_val = container.val_output_target
-    elif arch == "ila":
-        x_train = container.train_output / container.gain
-        x_val = container.val_output / container.gain
-        y_train = container.train_input_orig
-        y_val = container.val_input_orig
-    elif arch == "ilc":
-        x_train = container.train_input_orig
-        x_val = container.val_input_orig
-        y_train = container.ilc_train_output
-        ilc_val_output = container.ilc_val_output
-        if ilc_val_output is not None:
-            y_val = ilc_val_output
-        else:
-            y_val = y_train
-    else:
-        raise ValueError(f"Unknown arch '{arch}'")
+    match arch:
+        case "pa":
+            x_train = container.train_input_orig
+            x_val = container.val_input_orig
+            y_train = container.train_output
+            y_val = container.val_output
+        case "dla":
+            x_train = container.train_input_orig
+            x_val = container.val_input_orig
+            y_train = container.train_output_target
+            y_val = container.val_output_target
+        case "ila":
+            x_train = container.train_output / container.gain
+            x_val = container.val_output / container.gain
+            y_train = container.train_input_orig
+            y_val = container.val_input_orig
+        case "ilc":
+            x_train = container.train_input_orig
+            x_val = container.val_input_orig
+            y_train = container.ilc_train_output
+            ilc_val_output = container.ilc_val_output
+            if ilc_val_output is not None:
+                y_val = ilc_val_output
+            else:
+                y_val = y_train
+        case _:
+            raise ValueError(f"Unknown arch '{arch}'")
     
-    if normalize_method:
-        norm_x_train = input_norm.fit_transform(x_train)
-        norm_x_val = input_norm.transform(x_val)
-        norm_y_train = target_norm.fit_transform(y_train)
-        norm_y_val = target_norm.transform(y_val)
-    else:
-        norm_x_train = x_train
-        norm_x_val = x_val
-        norm_y_train = y_train
-        norm_y_val = y_val
+    norm_x_train = input_norm.fit_transform(x_train)
+    norm_x_val = input_norm.transform(x_val)
+    norm_y_train = target_norm.fit_transform(y_train)
+    norm_y_val = target_norm.transform(y_val)
     
     x_train = features_extractor(norm_x_train, **kwargs)
     x_val = features_extractor(norm_x_val, **kwargs)

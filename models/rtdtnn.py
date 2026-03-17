@@ -56,8 +56,7 @@ class RTDTNN(BaseModel, torch.nn.Module):
                  n_fc: int = 8, 
                  M: int = 5, 
                  num_blocks: int = 1, 
-                 model_name: str = "model",
-                 use_pe=False):
+                 model_name: str = "model"):
         
         torch.nn.Module.__init__(self)
         BaseModel.__init__(self, model_name=model_name)
@@ -70,13 +69,11 @@ class RTDTNN(BaseModel, torch.nn.Module):
         self.d_ff = d_ff
         self.n_fc = n_fc
         self.num_blocks = num_blocks
-        
-        self.use_pe = use_pe
-        
+
         self.in_norm = torch.nn.LayerNorm(d_in)
         
         self.input_fc = torch.nn.Linear(d_in, d_model)
-        self.pos_encoder = PositionalEncoding(d_model)
+        # self.pos_encoder = PositionalEncoding(d_model)
         
         self.encoders = torch.nn.ModuleList(
             [TransformerEncoderBlock(d_model, n_heads, d_ff) for _ in range(num_blocks)]
@@ -93,8 +90,8 @@ class RTDTNN(BaseModel, torch.nn.Module):
         
     def forward(self, x):
         x = self.input_fc(x)
-        if self.use_pe:
-            x = self.pos_encoder(x)
+        
+        # x = self.pos_encoder(x)
 
         for encoder in self.encoders:
             x = encoder(x)

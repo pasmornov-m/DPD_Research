@@ -225,8 +225,8 @@ class Normalizer:
                           'standard' для стандартизации (mean=0, std=1)
                           'power' для нормализация мощности E[|x|^2]=1
         """
-        assert method in ("minmax", "standard", "power"), \
-            "Метод должен быть 'minmax', 'standard' или 'power'"
+        assert method in ("minmax", "standard", "power", None), \
+            "Метод должен быть 'minmax', 'standard', 'power' или None"
         self.method = method
         self.params = {}
         self._eps = 1e-8
@@ -243,6 +243,8 @@ class Normalizer:
             case "power":
                 power = torch.mean(x[..., 0]**2 + x[..., 1]**2)
                 self.params['scale'] = torch.sqrt(power)
+            case None:
+                ...
 
     def transform(self, x: torch.Tensor) -> torch.Tensor:
         """Применяет нормализацию к x"""
@@ -253,6 +255,8 @@ class Normalizer:
                 return (x - self.params['mean']) / (self.params['std'] + self._eps)
             case "power":
                 return x / (self.params['scale'] + self._eps)
+            case None:
+                return x
 
     def inverse_transform(self, x_norm: torch.Tensor) -> torch.Tensor:
         """Денормализует x"""
@@ -263,6 +267,8 @@ class Normalizer:
                 return x_norm * self.params['std'] + self.params['mean']
             case "power":
                 return x_norm * self.params['scale']
+            case None:
+                return x_norm
 
     def fit_transform(self, x: torch.Tensor) -> torch.Tensor:
         """Комбинированный вызов fit + transform"""
