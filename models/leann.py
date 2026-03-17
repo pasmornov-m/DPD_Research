@@ -22,7 +22,7 @@ class LEANN(BaseModel, torch.nn.Module):
         self.L1 = 2
         self._EPS = 1e-12
 
-        self.fir = torch.nn.Linear(in_features=2*M, 
+        self.fir = torch.nn.Linear(in_features=2*(self.M+1), 
                                    out_features=2*self.L1, 
                                    bias=True)
         

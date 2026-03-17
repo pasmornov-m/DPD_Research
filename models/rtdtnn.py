@@ -87,7 +87,7 @@ class RTDTNN(BaseModel, torch.nn.Module):
         
         self.out = torch.nn.Linear(n_fc, 2)
         
-        torch.nn.init.zeros_(self.out.weight)
+        torch.nn.init.xavier_uniform_(self.out.weight)
         torch.nn.init.zeros_(self.out.bias)
 
         

@@ -223,33 +223,46 @@ class Normalizer:
         Args:
             method (str): 'minmax' для масштабирования в [0, 1], 
                           'standard' для стандартизации (mean=0, std=1)
+                          'power' для нормализация мощности E[|x|^2]=1
         """
-        assert method in ("minmax", "standard"), "Метод должен быть 'minmax' или 'standard'"
+        assert method in ("minmax", "standard", "power"), \
+            "Метод должен быть 'minmax', 'standard' или 'power'"
         self.method = method
         self.params = {}
+        self._eps = 1e-8
 
     def fit(self, x: torch.Tensor):
         """Рассчитывает параметры нормализации по тензору x"""
-        if self.method == "minmax":
-            self.params['min'] = x.min(dim=0, keepdim=True)[0]
-            self.params['max'] = x.max(dim=0, keepdim=True)[0]
-        else:  # standard
-            self.params['mean'] = x.mean(dim=0, keepdim=True)
-            self.params['std'] = x.std(dim=0, keepdim=True)
+        match self.method:
+            case "minmax":
+                self.params['min'] = x.min(dim=0, keepdim=True)[0]
+                self.params['max'] = x.max(dim=0, keepdim=True)[0]
+            case "standard":
+                self.params['mean'] = x.mean(dim=0, keepdim=True)
+                self.params['std'] = x.std(dim=0, keepdim=True)
+            case "power":
+                power = torch.mean(x[..., 0]**2 + x[..., 1]**2)
+                self.params['scale'] = torch.sqrt(power)
 
     def transform(self, x: torch.Tensor) -> torch.Tensor:
         """Применяет нормализацию к x"""
-        if self.method == "minmax":
-            return (x - self.params['min']) / (self.params['max'] - self.params['min'] + 1e-8)
-        else:   # standard
-            return (x - self.params['mean']) / (self.params['std'] + 1e-8)
+        match self.method:
+            case "minmax":
+                return (x - self.params['min']) / (self.params['max'] - self.params['min'] + self._eps)
+            case "standard":
+                return (x - self.params['mean']) / (self.params['std'] + self._eps)
+            case "power":
+                return x / (self.params['scale'] + self._eps)
 
     def inverse_transform(self, x_norm: torch.Tensor) -> torch.Tensor:
         """Денормализует x"""
-        if self.method == "minmax":
-            return x_norm * (self.params['max'] - self.params['min']) + self.params['min']
-        else:   # standard
-            return x_norm * self.params['std'] + self.params['mean']
+        match self.method:
+            case "minmax":
+                return x_norm * (self.params['max'] - self.params['min']) + self.params['min']
+            case "standard":
+                return x_norm * self.params['std'] + self.params['mean']
+            case "power":
+                return x_norm * self.params['scale']
 
     def fit_transform(self, x: torch.Tensor) -> torch.Tensor:
         """Комбинированный вызов fit + transform"""

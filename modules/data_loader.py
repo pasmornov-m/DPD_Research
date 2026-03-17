@@ -1,23 +1,25 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
-import pandas as pd
+# import pandas as pd
+import numpy as np
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Callable
 from modules import utils, metrics
 
 
 def load_csv_to_tensor(file_path: str) -> torch.Tensor:
-    data = pd.read_csv(file_path)
-    required_columns = {'I', 'Q'}
-    if not required_columns.issubset(data.columns):
-        raise ValueError(f"CSV file must contain columns: {required_columns}")
-    if data[['I', 'Q']].isnull().any().any():
+    data = np.genfromtxt(file_path, delimiter=',', names=True, dtype=np.float32)
+
+    if 'I' not in data.dtype.names or 'Q' not in data.dtype.names:
+        raise ValueError("CSV must contain columns: I, Q")
+
+    i = data['I']
+    q = data['Q']
+
+    if np.isnan(i).any() or np.isnan(q).any():
         raise ValueError("CSV file contains missing values.")
-    i_values = data['I'].to_numpy(dtype='float32')
-    q_values = data['Q'].to_numpy(dtype='float32')
-    i = torch.from_numpy(i_values)
-    q = torch.from_numpy(q_values)
-    iq = torch.stack((i, q), dim=1)
+
+    iq = torch.from_numpy(np.stack((i, q), axis=1))
     return iq
 
 
@@ -170,9 +172,17 @@ def build_dataloaders(container: DataContainer,
                       frame_length: int, 
                       batch_size: int, 
                       batch_size_eval: int, 
-                      arch: str):
+                      arch: str,
+                      normalize_method: str | None = None):
     
     nperseg = container.nperseg
+    
+    if normalize_method:
+        input_norm = utils.Normalizer(normalize_method)
+        target_norm = utils.Normalizer(normalize_method)
+    else:
+        input_norm = None
+        target_norm = None
 
     if arch == "pa":
         x_train = container.train_input
@@ -202,16 +212,22 @@ def build_dataloaders(container: DataContainer,
         else:
             y_val = y_train
 
+    if normalize_method:
+        x_train = input_norm.fit_transform(x_train)
+        x_val = input_norm.transform(x_val)
+        y_train = target_norm.fit_transform(y_train)
+        y_val = target_norm.transform(y_val)
+    
     train_set = IQDataset(x_train, y_train, nperseg=nperseg, frame_length=frame_length)
     val_set = IQDataset(x_val, y_val, nperseg=nperseg, frame_length=None)
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=batch_size_eval, shuffle=False)
 
-    return train_loader, val_loader
+    return train_loader, val_loader, input_norm, target_norm
 
 
-def build_X_in(iq_signal: torch.Tensor, M: int = 5, P: int = 4) -> torch.Tensor:
+def build_RTDTNN_features(iq_signal: torch.Tensor, M: int = 5, P: int = 4) -> torch.Tensor:
     """
     Parameters:
         iq_signal: torch.Tensor комплексной формы (N,) dtype=torch.complex64 или torch.complex128
@@ -245,64 +261,6 @@ def build_X_in(iq_signal: torch.Tensor, M: int = 5, P: int = 4) -> torch.Tensor:
     return X
 
 
-class RTDTNNDataset(torch.utils.data.Dataset):
-    def __init__(self, X_in: torch.Tensor, Y_out: torch.Tensor):
-        """
-        X_in: (N-M, M+1, 2+P)
-        Y_out: (N-M, 2)
-        """
-        self.X = X_in
-        self.Y = Y_out            
-    
-    def __len__(self):
-        return self.X.shape[0]
-
-    def __getitem__(self, idx):
-        return self.X[idx], self.Y[idx]
-
-
-def build_RTDTNN_dataloaders(container,
-                            batch_size: int,
-                            batch_size_eval: int,
-                            M: int,
-                            P: int,
-                            arch: str = None):
-    
-    if arch is None:
-        raise ValueError("arch must be specified: 'pa', 'dla', 'ila', or 'ilc'")
-    arch = arch.lower()
-    
-    x_train = build_X_in(container.train_input_orig, M, P)
-    x_val = build_X_in(container.val_input_orig, M, P)
-    
-    if arch == "pa":
-        y_train = container.train_output
-        y_val = container.val_output
-    elif arch == "dla":
-        y_train = container.train_output_target
-        y_val = container.val_output_target
-    elif arch == "ila":
-        y_train = container.train_input_orig
-        y_val = container.val_input_orig
-    elif arch == "ilc":
-        y_train = container.ilc_train_output
-        ilc_val_output = container.ilc_val_output
-        if ilc_val_output is not None:
-            y_val = ilc_val_output
-        else:
-            y_val = y_train
-    else:
-        raise ValueError(f"Unknown arch '{arch}'")
-    
-    train_dataset = RTDTNNDataset(x_train, y_train)
-    val_dataset = RTDTNNDataset(x_val, y_val)
-    
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size_eval, shuffle=True)
-    
-    return train_dataloader, val_dataloader
-
-
 def build_LEANN_features(x: torch.Tensor, M: int):
     
     # re/im
@@ -313,8 +271,8 @@ def build_LEANN_features(x: torch.Tensor, M: int):
         raise ValueError(f"Unsupported iq_signal shape: {x.shape}")
     
     # moving window
-    X_I = x_I.unfold(0, M, 1)
-    X_Q = x_Q.unfold(0, M, 1)
+    X_I = x_I.unfold(0, M+1, 1)
+    X_Q = x_Q.unfold(0, M+1, 1)
     
     # reverse
     X_I = torch.flip(X_I, dims=[1])
@@ -324,7 +282,8 @@ def build_LEANN_features(x: torch.Tensor, M: int):
 
     return X
 
-class LEANNDataset(torch.utils.data.Dataset):
+
+class BaseDataset(torch.utils.data.Dataset):
     def __init__(self, x: torch.Tensor, y: torch.Tensor):
         self.x = x
         self.y = y
@@ -336,35 +295,43 @@ class LEANNDataset(torch.utils.data.Dataset):
         return self.x[idx], self.y[idx]
 
 
-def build_LEANN_dataloaders(container,
-                            batch_size: int,
-                            batch_size_eval: int,
-                            M: int,
-                            arch: str = None):
+def build_nn_dataloaders(container,
+                         batch_size: int,
+                         batch_size_eval: int,
+                         arch: str,
+                         features_extractor: Callable,
+                         normalize_method: str | None = 'standard',
+                         **kwargs):
     
-    if arch is None:
-        raise ValueError("arch must be specified: 'pa', 'dla', 'ila', or 'ilc'")
     arch = arch.lower()
+    assert arch in ('pa', 'dla', 'ila', 'ilc'), \
+            "arch must be specified: 'pa', 'dla', 'ila' or 'ilc'"
     
-    input_norm = utils.Normalizer()
-    target_norm = utils.Normalizer()
-        
-    norm_x_train = input_norm.fit_transform(container.train_input_orig)
-    norm_x_val = input_norm.transform(container.val_input_orig)
-    
-    x_train = build_LEANN_features(norm_x_train, M)
-    x_val = build_LEANN_features(norm_x_val, M)
+    if normalize_method:
+        input_norm = utils.Normalizer(normalize_method)
+        target_norm = utils.Normalizer(normalize_method)
+    else:
+        input_norm = None
+        target_norm = None
     
     if arch == "pa":
+        x_train = container.train_input_orig
+        x_val = container.val_input_orig
         y_train = container.train_output
         y_val = container.val_output
     elif arch == "dla":
+        x_train = container.train_input_orig
+        x_val = container.val_input_orig
         y_train = container.train_output_target
         y_val = container.val_output_target
     elif arch == "ila":
+        x_train = container.train_output / container.gain
+        x_val = container.val_output / container.gain
         y_train = container.train_input_orig
         y_val = container.val_input_orig
     elif arch == "ilc":
+        x_train = container.train_input_orig
+        x_val = container.val_input_orig
         y_train = container.ilc_train_output
         ilc_val_output = container.ilc_val_output
         if ilc_val_output is not None:
@@ -374,11 +341,22 @@ def build_LEANN_dataloaders(container,
     else:
         raise ValueError(f"Unknown arch '{arch}'")
     
-    norm_y_train = target_norm.fit_transform(y_train)
-    norm_y_val = target_norm.transform(y_val)
+    if normalize_method:
+        norm_x_train = input_norm.fit_transform(x_train)
+        norm_x_val = input_norm.transform(x_val)
+        norm_y_train = target_norm.fit_transform(y_train)
+        norm_y_val = target_norm.transform(y_val)
+    else:
+        norm_x_train = x_train
+        norm_x_val = x_val
+        norm_y_train = y_train
+        norm_y_val = y_val
     
-    train_dataset = LEANNDataset(x_train, norm_y_train)
-    val_dataset = LEANNDataset(x_val, norm_y_val)
+    x_train = features_extractor(norm_x_train, **kwargs)
+    x_val = features_extractor(norm_x_val, **kwargs)
+    
+    train_dataset = BaseDataset(x_train, norm_y_train)
+    val_dataset = BaseDataset(x_val, norm_y_val)
     
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size_eval, shuffle=False)
