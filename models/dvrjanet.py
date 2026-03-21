@@ -3,8 +3,11 @@ from models.base_model import BaseModel
 
 
 class DVRJANET(BaseModel, torch.nn.Module):
-    def __init__(self, hidden_size, output_size, num_dvr_units=4, bias=True):
-        super(DVRJANET, self).__init__()
+    def __init__(self, hidden_size, output_size, num_dvr_units=4, bias=True, model_name: str = ""):
+        
+        torch.nn.Module.__init__(self)
+        BaseModel.__init__(self, model_name=model_name)
+        
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.num_dvr_units = num_dvr_units
@@ -28,6 +31,12 @@ class DVRJANET(BaseModel, torch.nn.Module):
         # Output projections
         self.W_o1 = torch.nn.Linear(hidden_size, 1, bias=bias)
         self.W_o2 = torch.nn.Linear(hidden_size, 1, bias=bias)
+    
+    def _get_filename(self):
+        return (
+            f"{self.model_name}_{self.class_name}_"
+            f"hs_{self.hidden_size}_out_{self.output_size}_"
+            f"dvr_{self.num_dvr_units}_bias_{int(self.bias)}.pt")
 
     def dvr_block(self, x, cs):
         # Implement DVR block as shown in figure (b)
@@ -40,11 +49,14 @@ class DVRJANET(BaseModel, torch.nn.Module):
             k+=1
         return sum(outputs)
 
-    def forward(self, x, h_0):
+    def forward(self, x, h_0=None):
         # x shape: (batch_size, seq_len, 2)
         # h_0 shape: (2, batch_size, hidden_size) - for I/Q components
         
         batch_size, seq_len, _ = x.shape
+        
+        if h_0 is None:  # Create initial hidden states if necessary
+            h_0 = torch.zeros(1, batch_size, self.hidden_size)
         h_I = h_0.squeeze(0) # I component hidden state
         h_Q = h_0.squeeze(0) # Q component hidden state
         outputs_I = []
@@ -98,7 +110,7 @@ class DVRJANET(BaseModel, torch.nn.Module):
         outputs_I = torch.stack(outputs_I, dim=1)
         outputs_Q = torch.stack(outputs_Q, dim=1)
         outputs = torch.cat([outputs_I, outputs_Q], dim=-1)
-        outputs = outputs.view(batch_size, seq_len, self.output_size)
+        # outputs = outputs.view(batch_size, seq_len, self.output_size)
         return outputs
 
     def reset_parameters(self):

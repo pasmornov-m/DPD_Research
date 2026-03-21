@@ -110,6 +110,7 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
     
     LEANN: lambda tp: {
         "M": tp["M"],
+        "L1": tp["L1"],
         "L2": tp["L2"],
         "L3": tp["L3"],
         "K": tp["K"],

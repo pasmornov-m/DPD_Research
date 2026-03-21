@@ -172,15 +172,15 @@ def build_dataloaders(container: DataContainer,
                       batch_size_eval: int, 
                       arch: str,
                       normalize_method: str | None = None):
+        
+    arch = arch.lower()
+    assert arch in ('pa', 'dla', 'ila', 'ilc'), \
+            "arch must be specified: 'pa', 'dla', 'ila' or 'ilc'"
     
+    input_norm = utils.Normalizer(normalize_method)
+    target_norm = utils.Normalizer(normalize_method)
+
     nperseg = container.nperseg
-    
-    if normalize_method:
-        input_norm = utils.Normalizer(normalize_method)
-        target_norm = utils.Normalizer(normalize_method)
-    else:
-        input_norm = None
-        target_norm = None
 
     if arch == "pa":
         x_train = container.train_input
@@ -209,12 +209,11 @@ def build_dataloaders(container: DataContainer,
             y_val = ilc_val_output
         else:
             y_val = y_train
-
-    if normalize_method:
-        x_train = input_norm.fit_transform(x_train)
-        x_val = input_norm.transform(x_val)
-        y_train = target_norm.fit_transform(y_train)
-        y_val = target_norm.transform(y_val)
+    
+    x_train = input_norm.fit_transform(x_train)
+    x_val = input_norm.transform(x_val)
+    y_train = target_norm.fit_transform(y_train)
+    y_val = target_norm.transform(y_val)
     
     train_set = IQDataset(x_train, y_train, nperseg=nperseg, frame_length=frame_length)
     val_set = IQDataset(x_val, y_val, nperseg=nperseg, frame_length=None)

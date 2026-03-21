@@ -135,19 +135,19 @@ class SimplePipeline:
                                                                            batch_size=self.batch_size, 
                                                                            batch_size_eval=self.batch_size_eval,
                                                                            arch="pa",
-                                                                           normalize_method='standard')
+                                                                           normalize_method=None)
             self.dla_train_loader, self.dla_val_loader, self.dla_input_norm, self.dla_target_norm = data_loader.build_dataloaders(container=self.container, 
                                                                             frame_length=self.frame_length, 
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 
                                                                             arch="dla",
-                                                                            normalize_method='standard')
+                                                                            normalize_method=None)
             self.ila_train_loader, self.ila_val_loader, self.ila_input_norm, self.ila_target_norm = data_loader.build_dataloaders(container=self.container, 
                                                                             frame_length=self.frame_length, 
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 
                                                                             arch="ila",
-                                                                            normalize_method='standard')
+                                                                            normalize_method=None)
         elif issubclass(self.base_model, GMP):
             self.pa_train_loader, self.pa_val_loader, self.pa_input_norm, self.pa_target_norm = data_loader.build_dataloaders(container=self.container, 
                                                                            frame_length=self.frame_length, 
@@ -362,7 +362,7 @@ class SimplePipeline:
                                                                             batch_size_eval=self.batch_size_eval,
                                                                             arch="ilc",
                                                                             features_extractor=feature_extractor,
-                                                                            normalize_method='minmax',
+                                                                            normalize_method=None,
                                                                             M=self.train_props["M"], 
                                                                             P=self.train_props["P"])
         elif issubclass(self.base_model, LEANN):
@@ -371,7 +371,7 @@ class SimplePipeline:
                                                                             batch_size_eval=self.batch_size_eval,
                                                                             arch="ilc",
                                                                             features_extractor=feature_extractor,
-                                                                            normalize_method='minmax',
+                                                                            normalize_method='standard',
                                                                             M=self.train_props["M"])
         elif issubclass(self.base_model, (GRU, LSTM)):
             self.ilc_train_loader, self.ilc_val_loader, self.ilc_input_norm, self.ilc_target_norm = data_loader.build_dataloaders(container=self.container, 
@@ -379,7 +379,7 @@ class SimplePipeline:
                                                                             batch_size=self.batch_size, 
                                                                             batch_size_eval=self.batch_size_eval, 
                                                                             arch="ilc",
-                                                                            normalize_method='standard')
+                                                                            normalize_method=None)
         else:
             self.ilc_train_loader, self.ilc_val_loader, self.ilc_input_norm, self.ilc_target_norm = data_loader.build_dataloaders(container=self.container, 
                                                                             frame_length=self.frame_length, 
