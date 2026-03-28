@@ -54,7 +54,7 @@ def log_layerwise_sparsity(model, only_weights: bool = True, eps: float = 0.0):
         eps (float): threshold to consider a value as zero
     """
     total_nonzero = 0
-    total_params = 0
+    total_params = model.count_params()
 
     print("=" * 72)
     print("Layer-wise sparsity report")
@@ -96,7 +96,6 @@ def log_layerwise_sparsity(model, only_weights: bool = True, eps: float = 0.0):
             print("-" * 72)
 
         total_nonzero += layer_nonzero
-        total_params += layer_total
 
     print("=" * 72)
     print(
