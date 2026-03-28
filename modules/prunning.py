@@ -169,116 +169,82 @@ class GlobalL1ThresholdUnstructured(prune.BasePruningMethod):
         return default_mask * new_mask
 
 
-class SparsityPipeline(pipelines.SimplePipeline):
-    def __init__(self, 
-                 container: data_loader.DataContainer, 
-                 train_props, 
-                 base_model,
-                 pa_model=None):
+def leann_prune(model,
+                alpha=1e-3,
+                tau=1e-3,
+                verbose=True):
+    """
+    Pruning for LEANN model
 
-        super().__init__(container, train_props, base_model, pa_model)
-        
+    alpha — threshold for LEA weights
+    tau   — threshold for FIR weights
+    """
 
-    def ilc_prune_amount(self, amount_range=np.arange(0, 1, 0.1), n_runs: int = 0, pruning_method=prune.L1Unstructured):
-        
-        self.evaluate_ilc_signal()
-        self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(container=self.container, 
-                                                                            frame_length=self.frame_length, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                            arch="ilc")
-        
-        for amount in amount_range:
-            
-            nmse_list = []
-            acpr_list = []
-            
-            for run_idx in range(n_runs):
-                print(f"[Amount {amount:.2f}] Run {run_idx+1}/{n_runs}")
+    with torch.no_grad():
 
-                dpd_model = self.base_model(**self.model_params, model_name="prune")
-                optimizer = self._build_optimizer(dpd_model)
-                scheduler = self._build_scheduler(optimizer)
+        stats = {}
 
-                time_train = 0
-                start = time.time()
+        # =========================
+        # LEA-1 pruning
+        # =========================
 
-                learning.train(net=dpd_model, 
-                            criterion=self.criterion,
-                            metric_criterion=self.metric_criterion,
-                            optimizer=optimizer,
-                            scheduler=scheduler,
-                            train_loader=self.ilc_train_loader, 
-                            val_loader=self.ilc_val_loader, 
-                            grad_clip_val=self.grad_clip_val, 
-                            n_epochs=self.epochs)
-                    
+        w1 = model.lea_1_weight
 
-                y_val_ilc_base, ilc_base_nmse, ilc_base_acpr = self._calculate_ilc_metrics(dpd_model)
-                nonzero_params_base, count_params = count_sparsity_parameters(dpd_model)
-                print(f"[ILC] [Base] NMSE: {ilc_base_nmse:.2f}, ACPR: {ilc_base_acpr}, nonzero_params: {nonzero_params_base}")
-                
-                                
-                parameters_to_prune = get_parameters_to_prune(dpd_model)
-                prune.global_unstructured(parameters_to_prune,
-                                          pruning_method=pruning_method,
-                                          amount=amount)
+        mask1 = torch.abs(w1) < alpha
 
-                y_val_ilc_prune, ilc_prune_nmse, ilc_prune_acpr = self._calculate_ilc_metrics(dpd_model)
-                nonzero_params_prune, _ = count_sparsity_parameters(dpd_model)
-                log_layerwise_sparsity(dpd_model)
-                print(f"[ILC] [Prune] NMSE: {ilc_prune_nmse:.2f}, ACPR: {ilc_prune_acpr}, nonzero_params: {nonzero_params_prune}")
+        pruned_1 = mask1.sum().item()
+        total_1 = w1.numel()
 
-                learning.train(net=dpd_model, 
-                            criterion=self.criterion, 
-                            optimizer=optimizer, 
-                            train_loader=self.ilc_train_loader, 
-                            val_loader=self.ilc_val_loader, 
-                            grad_clip_val=self.grad_clip_val, 
-                            n_epochs=self.epochs, 
-                            metric_criterion=self.metric_criterion,
-                            scheduler=scheduler)
-                
-                elapsed = time.time() - start
-                time_train = timedelta(seconds=round(elapsed))
-                
-                remove_prunned_parameters(parameters_to_prune)
-                
-                y_val_ilc_finetune, ilc_finetune_nmse, ilc_finetune_acpr = self._calculate_ilc_metrics(dpd_model)
-                nonzero_params_finetune, _ = count_sparsity_parameters(dpd_model)
-                log_layerwise_sparsity(dpd_model)
-                print(f"[ILC] [Finetune] NMSE: {ilc_finetune_nmse:.2f}, ACPR: {ilc_finetune_acpr}, nonzero_params: {nonzero_params_finetune}")
+        w1[mask1] = 0.0
 
-                nmse_list.append(ilc_finetune_nmse)
-                acpr_list.append(ilc_finetune_acpr)
+        stats["lea_1"] = (pruned_1, total_1)
 
-            
-            self.results["ilc"][amount] = {
-                "nmse_base": ilc_base_nmse.item(),
-                "acpr_base": ilc_base_acpr,
-                "y_val_ilc_base": y_val_ilc_base,
-                "nonzero_params_base": nonzero_params_base,
-                
-                "nmse_prune": ilc_prune_nmse.item(),
-                "acpr_prune": ilc_prune_acpr,
-                "y_val_ilc_prune": y_val_ilc_prune,
-                "nonzero_params_prune": nonzero_params_prune,
-                
-                "nmse_finetune": np.mean(nmse_list),
-                "acpr_finetune": np.mean(acpr_list),
-                "y_val_ilc_finetune": y_val_ilc_finetune,
-                "nonzero_params_finetune": nonzero_params_finetune,
-                
-                "time_train": time_train,
-                "count_params": count_params
-            }
-    
-    
-    def _calculate_ilc_metrics(self, dpd_model):
-        casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
-        y_signal = learning.net_inference(net=casc_ilc_eval, x=self.container.val_input)
-        nmse = metrics.compute_nmse(y_signal, self.container.val_output_target)
-        acpr = metrics.calculate_acpr(y_signal, self.acpr_meter)
-        return y_signal, nmse, acpr
-        
-    
+        # =========================
+        # LEA-K pruning
+        # =========================
+
+        wk = model.lea_k_weight
+
+        maskk = torch.abs(wk) < alpha
+
+        pruned_k = maskk.sum().item()
+        total_k = wk.numel()
+
+        wk[maskk] = 0.0
+
+        stats["lea_k"] = (pruned_k, total_k)
+
+        # =========================
+        # FIR pruning
+        # =========================
+
+        wf = model.fir.weight
+
+        maskf = torch.abs(wf) < tau
+
+        pruned_f = maskf.sum().item()
+        total_f = wf.numel()
+
+        wf[maskf] = 0.0
+
+        stats["fir"] = (pruned_f, total_f)
+
+        # =========================
+        # Reporting
+        # =========================
+
+        if verbose:
+
+            print("\n=== LEANN PRUNING REPORT ===")
+
+            for k, (p, t) in stats.items():
+
+                percent = 100 * p / t
+
+                print(
+                    f"{k}: "
+                    f"{p}/{t} pruned "
+                    f"({percent:.2f}%)"
+                )
+
+        return stats

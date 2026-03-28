@@ -1,9 +1,10 @@
 import torch
 from torch import nn
+import numpy as np
 from typing import Dict, Type
 import time
 from datetime import timedelta
-from modules import metrics, learning, params, data_loader, utils
+from modules import metrics, learning, params, data_loader, utils, prunning
 from modules.config import FRAME_LENGTH, BATCH_SIZE, BATCH_SIZE_EVAL, GRAD_CLIP_VAL, U_K_LR, U_K_EPOCHS
 from models.gmp import GMP
 from models.lstm import LSTM
@@ -23,6 +24,9 @@ class SimplePipeline:
         self.container = container
         
         self.pa_model = pa_model
+        self.dla_model = None
+        self.ila_model = None
+        self.ilc_model = None
 
         self.model_params = {}
         self.train_props = train_props
@@ -212,13 +216,13 @@ class SimplePipeline:
     
     def run_dla(self):
         print("Run DLA")
-        dpd_model = self.base_model(**self.model_params, model_name="dla")
-        count_params = dpd_model.count_params()
+        self.dla_model = self.base_model(**self.model_params, model_name="dla")
+        count_params = self.dla_model.count_params()
         print(f"count_params: {count_params}")
-        is_load = dpd_model.load_weights()
-        casc_dla = utils.CascadeModel(model_1=dpd_model, 
+        is_load = self.dla_model.load_weights()
+        casc_dla = utils.CascadeModel(model_1=self.dla_model, 
                                         model_2=self.pa_model)
-        optimizer = self._build_optimizer(dpd_model)
+        optimizer = self._build_optimizer(self.dla_model)
         scheduler = self._build_scheduler(optimizer)
 
         time_train = 0
@@ -235,7 +239,7 @@ class SimplePipeline:
                         scheduler=scheduler)
             elapsed = time.time() - start
             time_train = timedelta(seconds=round(elapsed))
-            dpd_model.save_weights()
+            self.dla_model.save_weights()
         
         if issubclass(self.base_model, RTDTNN):
             x_val = data_loader.build_RTDTNN_features(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props["P"])
@@ -257,13 +261,13 @@ class SimplePipeline:
 
     def run_ila(self):
         print("Run ILA")
-        dpd_model = self.base_model(**self.model_params, model_name="ila")
-        count_params = dpd_model.count_params()
+        self.ila_model = self.base_model(**self.model_params, model_name="ila")
+        count_params = self.ila_model.count_params()
         print(f"count_params: {count_params}")
-        is_load = dpd_model.load_weights()
-        casc_ila_train = utils.CascadeModel(model_1=self.pa_model, model_2=dpd_model, gain=self.container.gain, cascade_type="ila")
-        casc_ila_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
-        optimizer = self._build_optimizer(dpd_model)
+        is_load = self.ila_model.load_weights()
+        casc_ila_train = utils.CascadeModel(model_1=self.pa_model, model_2=self.ila_model, gain=self.container.gain, cascade_type="ila")
+        casc_ila_eval = utils.CascadeModel(model_1=self.ila_model, model_2=self.pa_model)
+        optimizer = self._build_optimizer(self.ila_model)
         scheduler = self._build_scheduler(optimizer)
 
         time_train = 0
@@ -280,7 +284,7 @@ class SimplePipeline:
                         scheduler=scheduler)
             elapsed = time.time() - start
             time_train = timedelta(seconds=round(elapsed))
-            dpd_model.save_weights()
+            self.ila_model.save_weights()
         
         if issubclass(self.base_model, RTDTNN):
             x_val = data_loader.build_RTDTNN_features(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props["P"])
@@ -337,11 +341,11 @@ class SimplePipeline:
     def run_ilc(self):
         print("Run ILC")
 
-        dpd_model = self.base_model(**self.model_params, model_name="ilc")
-        count_params = dpd_model.count_params()
+        self.ilc_model = self.base_model(**self.model_params, model_name="ilc")
+        count_params = self.ilc_model.count_params()
         print(f"count_params: {count_params}")
-        is_load = dpd_model.load_weights()
-        optimizer = self._build_optimizer(dpd_model)
+        is_load = self.ilc_model.load_weights()
+        optimizer = self._build_optimizer(self.ilc_model)
         scheduler = self._build_scheduler(optimizer)
         
         if issubclass(self.base_model, RTDTNN):
@@ -389,7 +393,7 @@ class SimplePipeline:
         
         if not is_load:
             start = time.time()
-            learning.train(net=dpd_model, 
+            learning.train(net=self.ilc_model, 
                         criterion=self.criterion, 
                         optimizer=optimizer, 
                         train_loader=self.ilc_train_loader, 
@@ -400,7 +404,7 @@ class SimplePipeline:
                         scheduler=scheduler)
             elapsed = time.time() - start
             time_train = timedelta(seconds=round(elapsed))
-            dpd_model.save_weights()
+            self.ilc_model.save_weights()
         
         
         use_normalize = (self.ilc_input_norm is not None) and (self.ilc_target_norm is not None)
@@ -418,17 +422,112 @@ class SimplePipeline:
             x_val = feature_extractor(x_val, M=self.train_props["M"])
         
         if use_normalize:
-            casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model, normalizer=self.ilc_target_norm)
+            casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model, normalizer=self.ilc_target_norm)
         else:
-            casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
+            casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model)
             
         # if issubclass(self.base_model, RTDTNN):
-        #     casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
+        #     casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model)
         
         if issubclass(self.base_model, LEANN):
             y_val_ilc = learning.net_inference(net=casc_ilc_eval, x=x_val, model_type="LEANN")
         else:
             y_val_ilc = learning.net_inference(net=casc_ilc_eval, x=x_val)
+        ilc_nmse = metrics.compute_nmse(y_val_ilc, self.container.val_output_target)
+        ilc_acpr = metrics.calculate_acpr(y_val_ilc, self.acpr_meter)
+        print(f"[ILC] NMSE: {ilc_nmse:.2f}, ACPR: {ilc_acpr[0]:.2f} {ilc_acpr[1]:.2f}, count_params: {count_params}")
+
+        self.results["ilc"] = {
+            "nmse": ilc_nmse.item(),
+            "acpr": ilc_acpr,
+            "y_val_ilc": y_val_ilc,
+            "time_train": time_train,
+            "count_params": count_params
+        }
+    
+    def run_ilc_pleann(self):
+        print("Run ILC")
+
+        self.ilc_model = self.base_model(**self.model_params, model_name="ilc_prune")
+        count_params = self.ilc_model.count_params()
+        print(f"count_params: {count_params}")
+        is_load = self.ilc_model.load_weights()
+        
+        criterion_reg = metrics.RegLoss(self.ilc_model, 
+                                        original_loss=metrics.compute_mse, 
+                                        lambda_reg=self.train_props['lambda_reg'])
+
+        optimizer1 = torch.optim.AdamW(self.ilc_model.parameters(), 
+                                      lr=self.train_props["lr"])
+        scheduler1 = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer1, 
+                                                               mode='min', 
+                                                               factor=0.5, 
+                                                               patience=10)
+
+        feature_extractor = data_loader.build_LEANN_features
+
+        time_train = 0
+        
+        if not is_load:
+            self.evaluate_ilc_signal()
+        
+        self.ilc_train_loader, self.ilc_val_loader, self.ilc_input_norm, self.ilc_target_norm = data_loader.build_nn_dataloaders(self.container, 
+                                                                        batch_size=self.batch_size, 
+                                                                        batch_size_eval=self.batch_size_eval,
+                                                                        arch="ilc",
+                                                                        features_extractor=feature_extractor,
+                                                                        normalize_method='standard',
+                                                                        M=self.train_props["M"])
+
+        if not is_load:
+            start = time.time()
+            learning.train(net=self.ilc_model, 
+                        criterion=self.criterion, 
+                        optimizer=optimizer1, 
+                        train_loader=self.ilc_train_loader, 
+                        val_loader=self.ilc_val_loader, 
+                        grad_clip_val=self.grad_clip_val, 
+                        n_epochs=self.epochs, 
+                        metric_criterion=self.metric_criterion,
+                        scheduler=scheduler1)
+            
+            optimizer2 = torch.optim.AdamW(self.ilc_model.parameters(), 
+                                          lr=self.train_props["lr2"])
+            scheduler2 = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer2, 
+                                                                   mode='min', 
+                                                                   factor=0.5, 
+                                                                   patience=10)
+            
+            learning.train(net=self.ilc_model, 
+                criterion=criterion_reg, 
+                optimizer=optimizer2, 
+                train_loader=self.ilc_train_loader, 
+                val_loader=self.ilc_val_loader, 
+                n_epochs=self.train_props['epochs2'], 
+                metric_criterion=self.metric_criterion,
+                scheduler=scheduler2)
+            
+            prunning.leann_prune(self.ilc_model, 
+                                 alpha=self.train_props['alpha'], 
+                                 tau=self.train_props['tau'],
+                                 verbose=True)
+            
+            elapsed = time.time() - start
+            time_train = timedelta(seconds=round(elapsed))
+            self.ilc_model.save_weights()
+        
+        use_normalize = (self.ilc_input_norm is not None) and (self.ilc_target_norm is not None)
+            
+        x_val = self.ilc_input_norm.transform(self.container.val_input_orig)
+        x_val = feature_extractor(x_val, M=self.train_props["M"])
+        
+        if use_normalize:
+            casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model, normalizer=self.ilc_target_norm)
+        else:
+            casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model)
+
+        y_val_ilc = learning.net_inference(net=casc_ilc_eval, x=x_val, model_type="LEANN")
+        
         ilc_nmse = metrics.compute_nmse(y_val_ilc, self.container.val_output_target)
         ilc_acpr = metrics.calculate_acpr(y_val_ilc, self.acpr_meter)
         print(f"[ILC] NMSE: {ilc_nmse:.2f}, ACPR: {ilc_acpr[0]:.2f} {ilc_acpr[1]:.2f}, count_params: {count_params}")
@@ -456,7 +555,134 @@ class SimplePipeline:
     
     def reset_u_k_signal(self):
         self.container.reset_ilc()
+    
+    def get_dpd_model(self, arch: str):
+        arch = arch.lower()
+        assert arch in ('dla', 'ila', 'ilc'), \
+                "arch must be specified: 'dla', 'ila' or 'ilc'"
+        match arch:
+            case "dla":
+                return self.dla_model
+            case "ila":
+                return self.ila_model
+            case "ilc":
+                return self.ilc_model
+            case _:
+                raise ValueError(f"Unknown arch '{arch}'")
+            
+
+
+class SparsityPipeline(SimplePipeline):
+    def __init__(self, 
+                 container: data_loader.DataContainer, 
+                 train_props, 
+                 base_model,
+                 pa_model=None):
+
+        super().__init__(container, train_props, base_model, pa_model)
         
+
+    def ilc_prune_amount(self, amount_range=np.arange(0, 1, 0.1), n_runs: int = 0, pruning_method=prunning.prune.L1Unstructured):
+        
+        self.evaluate_ilc_signal()
+        self.ilc_train_loader, self.ilc_val_loader = data_loader.build_dataloaders(container=self.container, 
+                                                                            frame_length=self.frame_length, 
+                                                                            batch_size=self.batch_size, 
+                                                                            batch_size_eval=self.batch_size_eval, 
+                                                                            arch="ilc")
+        
+        for amount in amount_range:
+            
+            nmse_list = []
+            acpr_list = []
+            
+            for run_idx in range(n_runs):
+                print(f"[Amount {amount:.2f}] Run {run_idx+1}/{n_runs}")
+
+                dpd_model = self.base_model(**self.model_params, model_name="prune")
+                optimizer = self._build_optimizer(dpd_model)
+                scheduler = self._build_scheduler(optimizer)
+
+                time_train = 0
+                start = time.time()
+
+                learning.train(net=dpd_model, 
+                            criterion=self.criterion,
+                            metric_criterion=self.metric_criterion,
+                            optimizer=optimizer,
+                            scheduler=scheduler,
+                            train_loader=self.ilc_train_loader, 
+                            val_loader=self.ilc_val_loader, 
+                            grad_clip_val=self.grad_clip_val, 
+                            n_epochs=self.epochs)
+                    
+
+                y_val_ilc_base, ilc_base_nmse, ilc_base_acpr = self._calculate_ilc_metrics(dpd_model)
+                nonzero_params_base, count_params = prunning.count_sparsity_parameters(dpd_model)
+                print(f"[ILC] [Base] NMSE: {ilc_base_nmse:.2f}, ACPR: {ilc_base_acpr}, nonzero_params: {nonzero_params_base}")
+                
+                                
+                parameters_to_prune = prunning.get_parameters_to_prune(dpd_model)
+                prunning.prune.global_unstructured(parameters_to_prune,
+                                          pruning_method=pruning_method,
+                                          amount=amount)
+
+                y_val_ilc_prune, ilc_prune_nmse, ilc_prune_acpr = self._calculate_ilc_metrics(dpd_model)
+                nonzero_params_prune, _ = prunning.count_sparsity_parameters(dpd_model)
+                prunning.log_layerwise_sparsity(dpd_model)
+                print(f"[ILC] [Prune] NMSE: {ilc_prune_nmse:.2f}, ACPR: {ilc_prune_acpr}, nonzero_params: {nonzero_params_prune}")
+
+                learning.train(net=dpd_model, 
+                            criterion=self.criterion, 
+                            optimizer=optimizer, 
+                            train_loader=self.ilc_train_loader, 
+                            val_loader=self.ilc_val_loader, 
+                            grad_clip_val=self.grad_clip_val, 
+                            n_epochs=self.epochs, 
+                            metric_criterion=self.metric_criterion,
+                            scheduler=scheduler)
+                
+                elapsed = time.time() - start
+                time_train = timedelta(seconds=round(elapsed))
+                
+                prunning.remove_prunned_parameters(parameters_to_prune)
+                
+                y_val_ilc_finetune, ilc_finetune_nmse, ilc_finetune_acpr = self._calculate_ilc_metrics(dpd_model)
+                nonzero_params_finetune, _ = prunning.count_sparsity_parameters(dpd_model)
+                prunning.log_layerwise_sparsity(dpd_model)
+                print(f"[ILC] [Finetune] NMSE: {ilc_finetune_nmse:.2f}, ACPR: {ilc_finetune_acpr}, nonzero_params: {nonzero_params_finetune}")
+
+                nmse_list.append(ilc_finetune_nmse)
+                acpr_list.append(ilc_finetune_acpr)
+
+            
+            self.results["ilc"][amount] = {
+                "nmse_base": ilc_base_nmse.item(),
+                "acpr_base": ilc_base_acpr,
+                "y_val_ilc_base": y_val_ilc_base,
+                "nonzero_params_base": nonzero_params_base,
+                
+                "nmse_prune": ilc_prune_nmse.item(),
+                "acpr_prune": ilc_prune_acpr,
+                "y_val_ilc_prune": y_val_ilc_prune,
+                "nonzero_params_prune": nonzero_params_prune,
+                
+                "nmse_finetune": np.mean(nmse_list),
+                "acpr_finetune": np.mean(acpr_list),
+                "y_val_ilc_finetune": y_val_ilc_finetune,
+                "nonzero_params_finetune": nonzero_params_finetune,
+                
+                "time_train": time_train,
+                "count_params": count_params
+            }
+    
+    
+    def _calculate_ilc_metrics(self, dpd_model):
+        casc_ilc_eval = utils.CascadeModel(model_1=dpd_model, model_2=self.pa_model)
+        y_signal = learning.net_inference(net=casc_ilc_eval, x=self.container.val_input)
+        nmse = metrics.compute_nmse(y_signal, self.container.val_output_target)
+        acpr = metrics.calculate_acpr(y_signal, self.acpr_meter)
+        return y_signal, nmse, acpr
 
 
 # class SnrPipeline:

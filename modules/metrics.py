@@ -352,3 +352,27 @@ class ACPR:
 
         return tuple(outputs) if len(outputs) > 1 else acpr
 
+
+class RegLoss(torch.nn.Module):
+    def __init__(self, model, original_loss, lambda_reg: float = 1e-4):
+        super().__init__()
+        
+        self.model = model
+        self.original_loss = original_loss
+        self.lambda_reg = lambda_reg
+        self.params = list(model.parameters())
+        self.num_params = sum(p.numel() for p in self.params)
+    
+    def extra_loss(self, eps=1e-2):
+        reg = 0.0
+
+        for p in self.params:
+            reg += torch.log10(p.pow(2) + eps).sum()
+
+        return reg / self.num_params
+    
+    def forward(self, prediction, target):
+        base_loss = self.original_loss(prediction, target)
+        reg = self.extra_loss()
+        
+        return base_loss + self.lambda_reg * reg
