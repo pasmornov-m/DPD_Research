@@ -94,7 +94,7 @@ def plot_weight_heatmaps(
                 data = data.reshape(1, -1)
 
             mask = np.abs(data) > 0
-            data_vis = np.where(mask, data, np.nan)
+            data_vis = np.where(mask, data, np.nan)            
             if data_vis.ndim == 3 and data_vis.shape[-1] == 1:
                 data_vis = data_vis[..., 0]
             

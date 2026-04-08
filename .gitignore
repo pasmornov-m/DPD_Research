@@ -3,6 +3,7 @@
 /.vscode
 /.pytest_cache
 /logs
+**.xlsx
 
 dev_ar_&_moe.ipynb
 

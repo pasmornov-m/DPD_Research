@@ -83,7 +83,7 @@ class LEANN(BaseModel, torch.nn.Module):
         yQ = Q.sum(dim=(1, 2))
         return torch.stack([yI, yQ], dim=-1)
     
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         x: [B, 2M]
         returns y: [B, 2]
