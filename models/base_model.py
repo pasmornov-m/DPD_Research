@@ -25,7 +25,7 @@ class BaseModel:
         return total
     
     @property
-    def filename(self):
+    def filename(self) -> str:
         if self._filename is None:
             self._filename = self._get_filename()
         return self._filename
@@ -33,7 +33,7 @@ class BaseModel:
     def _get_filename(self):
         raise NotImplementedError
     
-    def save_weights(self, directory: str = "model_params"):
+    def save_weights(self, directory: str = "model_params") -> None:
         os.makedirs(directory, exist_ok=True)
         full_path = f"{directory}/{self.filename}"
         torch.save(self.state_dict(), full_path)

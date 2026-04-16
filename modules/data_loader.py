@@ -296,7 +296,7 @@ def build_nn_dataloaders(container,
                          batch_size: int,
                          batch_size_eval: int,
                          arch: str,
-                         features_extractor: Callable,
+                         features_extractor: Callable = lambda x, **kwargs: x,
                          normalize_method: str | None = 'standard',
                          **kwargs):
     

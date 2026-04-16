@@ -1,6 +1,5 @@
 import torch
 from models.base_model import BaseModel
-from modules import utils
 
 
 class LEANN(BaseModel, torch.nn.Module):
