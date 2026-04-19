@@ -227,7 +227,7 @@ def build_dataloaders(container: DataContainer,
 def build_RTDTNN_features(iq_signal: torch.Tensor, M: int = 5, P: int = 4) -> torch.Tensor:
     """
     Parameters:
-        iq_signal: torch.Tensor комплексной формы (N,) dtype=torch.complex64 или torch.complex128
+        iq_signal: torch.Tensor формы (N, 2)
         M: memory depth
         P: max amplitude power
 
