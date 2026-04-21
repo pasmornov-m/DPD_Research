@@ -53,28 +53,8 @@ class SimplePipeline:
         self.u_k_lr = None
         self.u_k_epochs = None
         
-        # self.dataloaders_props = None
-        # self.pa_train_loader = None
-        # self.pa_val_loader = None
-        # self.pa_input_norm = None
-        # self.pa_target_norm = None
-        # self.dla_train_loader = None
-        # self.dla_val_loader = None
-        # self.dla_input_norm = None
-        # self.dla_target_norm = None
-        # self.ila_train_loader = None
-        # self.ila_val_loader = None
-        # self.ila_input_norm = None
-        # self.ila_target_norm = None
-        # self.ilc_train_loader = None
-        # self.ilc_val_loader = None
-        # self.ilc_input_norm = None
-        # self.ilc_target_norm = None
-        
         self._prepare_params()
-        
         self.loader_props = self._prepare_loaders_props()
-        # self._prepare_loaders()
     
     def _prepare_params(self):
         try:
