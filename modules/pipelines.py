@@ -11,6 +11,7 @@ from models.lstm import LSTM
 from models.gru import GRU
 from models.rtdtnn import RTDTNN
 from models.leann import LEANN
+from models.tcn import TCN
 
 
 class SimplePipeline:
@@ -46,62 +47,23 @@ class SimplePipeline:
         self.criterion = metrics.compute_mse
         self.metric_criterion = metrics.compute_nmse
         
-        self.frame_length = None
-        self.batch_size = None
-        self.batch_size_eval = None
-        self.grad_clip_val = None
-        self.u_k_lr = None
-        self.u_k_epochs = None
-        
-        self._prepare_params()
-        self.loader_props = self._prepare_loaders_props()
-    
-    def _prepare_params(self):
-        try:
-            builder = params.MODEL_REGISTRY[self.base_model]
-        except KeyError:
-            raise ValueError(f"Unsupported base_model: {self.base_model}")
-
-        self.model_params = builder(self.train_props)
-
         self.frame_length = FRAME_LENGTH
         self.batch_size = BATCH_SIZE
         self.batch_size_eval = BATCH_SIZE_EVAL
         self.grad_clip_val = GRAD_CLIP_VAL
         self.u_k_lr = U_K_LR
         self.u_k_epochs = U_K_EPOCHS
+        
+        self._prepare_model_params()
+        self.loader_props = params.DATALOADERS_PROPS[self.base_model](self.features_extractor, self.train_props)
     
-    def _prepare_loaders_props(self):
-        DATALOADERS_PROPS: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
-            GMP: {"batch_size": self.batch_size,
-                   "batch_size_eval": self.batch_size_eval,
-                   "frame_length": self.frame_length,
-                   "features_extractor": self.features_extractor,
-                   "normalize_method": None},
-            GRU: {"batch_size": self.batch_size,
-                   "batch_size_eval": self.batch_size_eval,
-                   "frame_length": self.frame_length,
-                   "features_extractor": self.features_extractor,
-                   "normalize_method": 'standard'},
-            LSTM: {"batch_size": self.batch_size,
-                   "batch_size_eval": self.batch_size_eval,
-                   "frame_length": self.frame_length,
-                   "features_extractor": self.features_extractor,
-                   "normalize_method": 'standard'},
-            RTDTNN: {"batch_size": self.batch_size,
-                     "batch_size_eval": self.batch_size_eval,
-                     "features_extractor": self.features_extractor,
-                     "normalize_method": 'standard',
-                     "M": self.train_props.get("M"),
-                     "P": self.train_props.get("P")},
-            LEANN: {"batch_size": self.batch_size,
-                    "batch_size_eval": self.batch_size_eval,
-                    "features_extractor": self.features_extractor,
-                    "normalize_method": 'standard',
-                    "M": self.train_props.get("M")},
-        }
-        props = DATALOADERS_PROPS[self.base_model]
-        return props
+    def _prepare_model_params(self):
+        try:
+            builder = params.MODEL_REGISTRY[self.base_model]
+        except KeyError:
+            raise ValueError(f"Unsupported base_model: {self.base_model}")
+
+        self.model_params = builder(self.train_props)
     
     def prepare_loaders(self, arch):
         train_loader, val_loader, input_norm, target_norm = self.dataloader(self.container,
@@ -134,7 +96,7 @@ class SimplePipeline:
                     optimizer=optimizer, 
                     train_loader=train_loader, 
                     val_loader=val_loader, 
-                    grad_clip_val=1.0, 
+                    grad_clip_val=self.grad_clip_val, 
                     n_epochs=self.epochs, 
                     metric_criterion=self.metric_criterion,
                     scheduler=scheduler)

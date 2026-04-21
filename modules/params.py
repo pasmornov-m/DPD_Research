@@ -6,7 +6,9 @@ from models.gru import GRU
 from models.lstm import LSTM
 from models.rtdtnn import RTDTNN
 from models.leann import LEANN
+from models.tcn import TCN
 from modules import data_loader
+from modules.config import FRAME_LENGTH, BATCH_SIZE, BATCH_SIZE_EVAL
 
 
 @dataclass
@@ -117,6 +119,11 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
         "L3": tp["L3"],
         "K": tp["K"],
     },
+    
+    TCN: lambda tp: {
+        "hidden_channels": tp["hidden_channels"],
+        "kernel_size": tp["kernel_size"],
+    },
 }
 
 
@@ -124,6 +131,7 @@ EXTRACTORS_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
     GMP: None,
     GRU: None,
     LSTM: None,
+    TCN: None,
     RTDTNN: data_loader.build_RTDTNN_features,
     LEANN: data_loader.build_LEANN_features,
 }
@@ -133,6 +141,47 @@ DATALOADERS_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
     GMP: data_loader.build_dataloaders,
     GRU: data_loader.build_dataloaders,
     LSTM: data_loader.build_dataloaders,
+    TCN: data_loader.build_dataloaders,
     RTDTNN: data_loader.build_nn_dataloaders,
     LEANN: data_loader.build_nn_dataloaders,
+}
+
+DATALOADERS_PROPS: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
+    GMP: lambda features_extractor, *args, **kwargs: {
+        "batch_size": BATCH_SIZE,
+        "batch_size_eval": BATCH_SIZE_EVAL,
+        "frame_length": FRAME_LENGTH,
+        "features_extractor": features_extractor,
+        "normalize_method": None},
+    GRU: lambda features_extractor, *args, **kwargs: {
+        "batch_size": BATCH_SIZE,
+        "batch_size_eval": BATCH_SIZE_EVAL,
+        "frame_length": FRAME_LENGTH,
+        "features_extractor": features_extractor,
+        "normalize_method": 'standard'},
+    LSTM: lambda features_extractor, *args, **kwargs: {
+        "batch_size": BATCH_SIZE,
+        "batch_size_eval": BATCH_SIZE_EVAL,
+        "frame_length": FRAME_LENGTH,
+        "features_extractor": features_extractor,
+        "normalize_method": 'standard'},
+    RTDTNN: lambda features_extractor, train_props, *args, **kwargs: {
+        "batch_size": BATCH_SIZE,
+        "batch_size_eval": BATCH_SIZE_EVAL,
+        "features_extractor": features_extractor,
+        "normalize_method": 'standard',
+        "M": train_props.get("M"),
+        "P": train_props.get("P")},
+    LEANN: lambda features_extractor, train_props, *args, **kwargs: {
+        "batch_size": BATCH_SIZE,
+        "batch_size_eval": BATCH_SIZE_EVAL,
+        "features_extractor": features_extractor,
+        "normalize_method": 'standard',
+        "M": train_props.get("M")},
+    TCN: lambda features_extractor, *args, **kwargs: {
+        "batch_size": BATCH_SIZE,
+        "batch_size_eval": BATCH_SIZE_EVAL,
+        "frame_length": FRAME_LENGTH,
+        "features_extractor": features_extractor,
+        "normalize_method": 'standard'},
 }
