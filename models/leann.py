@@ -19,16 +19,15 @@ class LEANN(BaseModel, torch.nn.Module):
         self.L3 = L3
         self.K = K
         self.L1 = L1
-        self._EPS = 1e-12
 
         self.fir = torch.nn.Linear(in_features=2*(self.M+1), 
                                    out_features=2*self.L1, 
                                    bias=True)
         
-        self.lea_1_weight = torch.nn.Parameter(torch.randn(self.L1, L2) * 1)
+        self.lea_1_weight = torch.nn.Parameter(torch.randn(self.L1, L2))
         self.lea_1_bias = torch.nn.Parameter(torch.zeros(self.L1, L2))
         
-        self.lea_k_weight = torch.nn.Parameter(torch.randn(L2, L3) * 1)
+        self.lea_k_weight = torch.nn.Parameter(torch.randn(L2, L3))
         self.lea_k_bias = torch.nn.Parameter(torch.zeros(L2, L3))
         
         torch.nn.init.xavier_uniform_(self.lea_1_weight)

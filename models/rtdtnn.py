@@ -29,7 +29,7 @@ class TransformerEncoderBlock(torch.nn.Module):
         self.conv2 = torch.nn.Conv1d(d_ff, d_model, kernel_size=1)
         self.ln2 = torch.nn.LayerNorm(d_model)
 
-        self.activation = torch.nn.Tanh()
+        self.activation = torch.nn.Hardswish()
 
     def forward(self, x):
         attn_out, _ = self.attn(x, x, x)
@@ -80,7 +80,8 @@ class RTDTNN(BaseModel, torch.nn.Module):
         )
         
         self.fc = torch.nn.Linear(self.T * d_model, n_fc)
-        self.activation = torch.nn.Tanh()
+
+        self.activation = torch.nn.Hardswish()
         
         self.out = torch.nn.Linear(n_fc, 2)
         

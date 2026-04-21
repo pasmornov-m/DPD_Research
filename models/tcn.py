@@ -23,7 +23,6 @@ class TCN(BaseModel, torch.nn.Module):
         pad2 = (kernel_size - 1) * self.dilation * 2
         pad3 = (kernel_size - 1) * self.dilation * 4
         pad4 = (kernel_size - 1) * self.dilation * 8
-
         
         self.network = torch.nn.Sequential(
             torch.nn.Conv1d(in_channels=self.in_channels, 

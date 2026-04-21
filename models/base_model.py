@@ -7,6 +7,7 @@ class BaseModel:
         self.model_name = model_name
         self.class_name = self.__class__.__name__
         self._filename = None
+        self._EPS = 1e-12
     
     def count_params(self) -> int:
         total = 0
