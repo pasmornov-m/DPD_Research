@@ -171,7 +171,8 @@ def build_dataloaders(container: DataContainer,
                       batch_size: int, 
                       batch_size_eval: int, 
                       arch: str,
-                      normalize_method: str | None = None):
+                      normalize_method: str | None = None,
+                      **kwargs):
         
     arch = arch.lower()
     assert arch in ('pa', 'dla', 'ila', 'ilc'), \
@@ -224,7 +225,7 @@ def build_dataloaders(container: DataContainer,
     return train_loader, val_loader, input_norm, target_norm
 
 
-def build_RTDTNN_features(iq_signal: torch.Tensor, M: int = 5, P: int = 4) -> torch.Tensor:
+def build_RTDTNN_features(iq_signal: torch.Tensor, M: int = 5, P: int = 4, **kwargs) -> torch.Tensor:
     """
     Parameters:
         iq_signal: torch.Tensor формы (N, 2)
@@ -258,7 +259,7 @@ def build_RTDTNN_features(iq_signal: torch.Tensor, M: int = 5, P: int = 4) -> to
     return X
 
 
-def build_LEANN_features(x: torch.Tensor, M: int):
+def build_LEANN_features(x: torch.Tensor, M: int, **kwargs):
     
     # re/im
     if len(x.shape) == 2 and x.shape[-1] == 2:

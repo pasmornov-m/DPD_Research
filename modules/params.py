@@ -6,6 +6,7 @@ from models.gru import GRU
 from models.lstm import LSTM
 from models.rtdtnn import RTDTNN
 from models.leann import LEANN
+from modules import data_loader
 
 
 @dataclass
@@ -119,124 +120,19 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
 }
 
 
+EXTRACTORS_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
+    GMP: None,
+    GRU: None,
+    LSTM: None,
+    RTDTNN: data_loader.build_RTDTNN_features,
+    LEANN: data_loader.build_LEANN_features,
+}
 
 
 DATALOADERS_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
-
-    GMP: lambda p:{},
-
-    GRU: lambda tp: {
-        "hidden_size": tp["hidden_size"],
-        "num_layers": tp["num_layers"],
-        "bidirectional": tp["bidirectional"],
-    },
-
-    LSTM: lambda tp: {
-        "hidden_size": tp["hidden_size"],
-        "num_layers": tp["num_layers"],
-        "bidirectional": tp["bidirectional"],
-    },
-
-    RTDTNN: {"dataloader_func": data_loader.build_nn_dataloaders},
-    
-    LEANN: lambda tp: {
-        "M": tp["M"],
-        "L1": tp["L1"],
-        "L2": tp["L2"],
-        "L3": tp["L3"],
-        "K": tp["K"],
-    },
+    GMP: data_loader.build_dataloaders,
+    GRU: data_loader.build_dataloaders,
+    LSTM: data_loader.build_dataloaders,
+    RTDTNN: data_loader.build_nn_dataloaders,
+    LEANN: data_loader.build_nn_dataloaders,
 }
-
-try:
-    builder = params.MODEL_REGISTRY[self.base_model]
-except KeyError:
-    raise ValueError(f"Unsupported base_model: {self.base_model}")
-
-self.model_params = builder(self.train_props)
-
-
-def _prepare_loaders(model, dataloader, container, batch_size, batch_size_eval, feature_extractor, train_props, arch):
-    dataloaders_builder = DATALOADERS_REGISTRY[model]
-    dataloader = dataloaders_builder(dataloader, container, batch_size, batch_size_eval, feature_extractor, train_props)
-    
-    if issubclass(base_model, RTDTNN):
-        pa_train_loader, pa_val_loader, pa_input_norm, pa_target_norm = data_loader.build_nn_dataloaders(container, 
-                                                                                        batch_size=batch_size, 
-                                                                                        batch_size_eval=batch_size_eval,
-                                                                                        arch=arch,
-                                                                                        features_extractor=feature_extractor,
-                                                                                        M=train_props["M"], 
-                                                                                        P=train_props["P"])
-        dla_train_loader, dla_val_loader, dla_input_norm, dla_target_norm = data_loader.build_nn_dataloaders(container, 
-                                                                                        batch_size=batch_size, 
-                                                                                        batch_size_eval=batch_size_eval, 
-                                                                                        arch=arch,
-                                                                                        features_extractor=feature_extractor,
-                                                                                        M=train_props["M"], 
-                                                                                        P=train_props["P"])
-        ila_train_loader, ila_val_loader, ila_input_norm, ila_target_norm = data_loader.build_nn_dataloaders(container, 
-                                                                                        batch_size=batch_size, 
-                                                                                        batch_size_eval=batch_size_eval,
-                                                                                        arch=arch,
-                                                                                        features_extractor=feature_extractor,
-                                                                                        M=train_props["M"], 
-                                                                                        P=train_props["P"])
-    elif issubclass(base_model, LEANN):
-        feature_extractor = data_loader.build_LEANN_features
-        pa_train_loader, pa_val_loader, pa_input_norm, pa_target_norm = data_loader.build_nn_dataloaders(container, 
-                                                                                        batch_size=batch_size, 
-                                                                                        batch_size_eval=batch_size_eval, 
-                                                                                        arch=arch,
-                                                                                        features_extractor=feature_extractor,
-                                                                                        normalize_method='standard',
-                                                                                        M=train_props["M"])
-        dla_train_loader, dla_val_loader, dla_input_norm, dla_target_norm = data_loader.build_nn_dataloaders(container, 
-                                                                                        batch_size=batch_size, 
-                                                                                        batch_size_eval=batch_size_eval,
-                                                                                        arch=arch,
-                                                                                        features_extractor=feature_extractor,
-                                                                                        normalize_method='standard',
-                                                                                        M=train_props["M"])
-        ila_train_loader, ila_val_loader, ila_input_norm, ila_target_norm = data_loader.build_nn_dataloaders(container, 
-                                                                                        batch_size=batch_size, 
-                                                                                        batch_size_eval=batch_size_eval,
-                                                                                        arch=arch,
-                                                                                        features_extractor=feature_extractor,
-                                                                                        normalize_method='standard',
-                                                                                        M=train_props["M"])
-    elif issubclass(base_model, (GRU, LSTM)):
-        pa_train_loader, pa_val_loader, pa_input_norm, pa_target_norm = data_loader.build_dataloaders(container=container, 
-                                                                        frame_length=frame_length, 
-                                                                        batch_size=batch_size, 
-                                                                        batch_size_eval=batch_size_eval,
-                                                                        arch=arch,
-                                                                        normalize_method='standard')
-        dla_train_loader, dla_val_loader, dla_input_norm, dla_target_norm = data_loader.build_dataloaders(container=container, 
-                                                                        frame_length=frame_length, 
-                                                                        batch_size=batch_size, 
-                                                                        batch_size_eval=batch_size_eval, 
-                                                                        arch=arch,
-                                                                        normalize_method='standard')
-        ila_train_loader, ila_val_loader, ila_input_norm, ila_target_norm = data_loader.build_dataloaders(container=container, 
-                                                                        frame_length=frame_length, 
-                                                                        batch_size=batch_size, 
-                                                                        batch_size_eval=batch_size_eval, 
-                                                                        arch=arch,
-                                                                        normalize_method='standard')
-    elif issubclass(base_model, GMP):
-        pa_train_loader, pa_val_loader, pa_input_norm, pa_target_norm = data_loader.build_dataloaders(container=container, 
-                                                                        frame_length=frame_length, 
-                                                                        batch_size=batch_size, 
-                                                                        batch_size_eval=batch_size_eval,
-                                                                        arch=arch)
-        dla_train_loader, dla_val_loader, dla_input_norm, dla_target_norm = data_loader.build_dataloaders(container=container, 
-                                                                        frame_length=frame_length, 
-                                                                        batch_size=batch_size, 
-                                                                        batch_size_eval=batch_size_eval, 
-                                                                        arch=arch)
-        ila_train_loader, ila_val_loader, ila_input_norm, ila_target_norm = data_loader.build_dataloaders(container=container, 
-                                                                        frame_length=frame_length, 
-                                                                        batch_size=batch_size, 
-                                                                        batch_size_eval=batch_size_eval, 
-                                                                        arch=arch)

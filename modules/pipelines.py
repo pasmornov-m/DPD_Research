@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import numpy as np
-from typing import Dict, Type
+from typing import Dict, Type, Callable
 import time
 from datetime import timedelta
 from modules import metrics, learning, params, data_loader, utils, prunning
@@ -33,6 +33,8 @@ class SimplePipeline:
         self.lr = self.train_props["lr"]
         self.epochs = self.train_props["epochs"]
         self.acpr_meter = self.train_props["acpr_meter"]
+        self.features_extractor = params.EXTRACTORS_REGISTRY[base_model]
+        self.dataloader = params.DATALOADERS_REGISTRY[base_model]
         
         self.results = {
             "pa": {},
@@ -51,25 +53,28 @@ class SimplePipeline:
         self.u_k_lr = None
         self.u_k_epochs = None
         
-        self.pa_train_loader = None
-        self.pa_val_loader = None
-        self.pa_input_norm = None
-        self.pa_target_norm = None
-        self.dla_train_loader = None
-        self.dla_val_loader = None
-        self.dla_input_norm = None
-        self.dla_target_norm = None
-        self.ila_train_loader = None
-        self.ila_val_loader = None
-        self.ila_input_norm = None
-        self.ila_target_norm = None
-        self.ilc_train_loader = None
-        self.ilc_val_loader = None
-        self.ilc_input_norm = None
-        self.ilc_target_norm = None
+        # self.dataloaders_props = None
+        # self.pa_train_loader = None
+        # self.pa_val_loader = None
+        # self.pa_input_norm = None
+        # self.pa_target_norm = None
+        # self.dla_train_loader = None
+        # self.dla_val_loader = None
+        # self.dla_input_norm = None
+        # self.dla_target_norm = None
+        # self.ila_train_loader = None
+        # self.ila_val_loader = None
+        # self.ila_input_norm = None
+        # self.ila_target_norm = None
+        # self.ilc_train_loader = None
+        # self.ilc_val_loader = None
+        # self.ilc_input_norm = None
+        # self.ilc_target_norm = None
         
         self._prepare_params()
-        self._prepare_loaders()
+        
+        self.loader_props = self._prepare_loaders_props()
+        # self._prepare_loaders()
     
     def _prepare_params(self):
         try:
@@ -86,88 +91,43 @@ class SimplePipeline:
         self.u_k_lr = U_K_LR
         self.u_k_epochs = U_K_EPOCHS
     
-    def _prepare_loaders(self):
-        if issubclass(self.base_model, RTDTNN):
-            features_extractor = data_loader.build_RTDTNN_features
-            self.pa_train_loader, self.pa_val_loader, self.pa_input_norm, self.pa_target_norm = data_loader.build_nn_dataloaders(self.container, 
-                                                                                            batch_size=self.batch_size, 
-                                                                                            batch_size_eval=self.batch_size_eval,
-                                                                                            arch="pa",
-                                                                                            features_extractor=features_extractor,
-                                                                                            M=self.train_props["M"], 
-                                                                                            P=self.train_props["P"])
-            self.dla_train_loader, self.dla_val_loader, self.dla_input_norm, self.dla_target_norm = data_loader.build_nn_dataloaders(self.container, 
-                                                                                            batch_size=self.batch_size, 
-                                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                                            arch="dla",
-                                                                                            features_extractor=features_extractor,
-                                                                                            M=self.train_props["M"], 
-                                                                                            P=self.train_props["P"])
-            self.ila_train_loader, self.ila_val_loader, self.ila_input_norm, self.ila_target_norm = data_loader.build_nn_dataloaders(self.container, 
-                                                                                            batch_size=self.batch_size, 
-                                                                                            batch_size_eval=self.batch_size_eval,
-                                                                                            arch="ila",
-                                                                                            features_extractor=features_extractor,
-                                                                                            M=self.train_props["M"], 
-                                                                                            P=self.train_props["P"])
-        elif issubclass(self.base_model, LEANN):
-            features_extractor = data_loader.build_LEANN_features
-            self.pa_train_loader, self.pa_val_loader, self.pa_input_norm, self.pa_target_norm = data_loader.build_nn_dataloaders(self.container, 
-                                                                                            batch_size=self.batch_size, 
-                                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                                            arch="pa",
-                                                                                            features_extractor=features_extractor,
-                                                                                            normalize_method='standard',
-                                                                                            M=self.train_props["M"])
-            self.dla_train_loader, self.dla_val_loader, self.dla_input_norm, self.dla_target_norm = data_loader.build_nn_dataloaders(self.container, 
-                                                                                            batch_size=self.batch_size, 
-                                                                                            batch_size_eval=self.batch_size_eval,
-                                                                                            arch="dla",
-                                                                                            features_extractor=features_extractor,
-                                                                                            normalize_method='standard',
-                                                                                            M=self.train_props["M"])
-            self.ila_train_loader, self.ila_val_loader, self.ila_input_norm, self.ila_target_norm = data_loader.build_nn_dataloaders(self.container, 
-                                                                                            batch_size=self.batch_size, 
-                                                                                            batch_size_eval=self.batch_size_eval,
-                                                                                            arch="ila",
-                                                                                            features_extractor=features_extractor,
-                                                                                            normalize_method='standard',
-                                                                                            M=self.train_props["M"])
-        elif issubclass(self.base_model, (GRU, LSTM)):
-            self.pa_train_loader, self.pa_val_loader, self.pa_input_norm, self.pa_target_norm = data_loader.build_dataloaders(container=self.container, 
-                                                                           frame_length=self.frame_length, 
-                                                                           batch_size=self.batch_size, 
-                                                                           batch_size_eval=self.batch_size_eval,
-                                                                           arch="pa",
-                                                                           normalize_method='standard')
-            self.dla_train_loader, self.dla_val_loader, self.dla_input_norm, self.dla_target_norm = data_loader.build_dataloaders(container=self.container, 
-                                                                            frame_length=self.frame_length, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                            arch="dla",
-                                                                            normalize_method='standard')
-            self.ila_train_loader, self.ila_val_loader, self.ila_input_norm, self.ila_target_norm = data_loader.build_dataloaders(container=self.container, 
-                                                                            frame_length=self.frame_length, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                            arch="ila",
-                                                                            normalize_method='standard')
-        elif issubclass(self.base_model, GMP):
-            self.pa_train_loader, self.pa_val_loader, self.pa_input_norm, self.pa_target_norm = data_loader.build_dataloaders(container=self.container, 
-                                                                           frame_length=self.frame_length, 
-                                                                           batch_size=self.batch_size, 
-                                                                           batch_size_eval=self.batch_size_eval,
-                                                                           arch="pa")
-            self.dla_train_loader, self.dla_val_loader, self.dla_input_norm, self.dla_target_norm = data_loader.build_dataloaders(container=self.container, 
-                                                                            frame_length=self.frame_length, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                            arch="dla")
-            self.ila_train_loader, self.ila_val_loader, self.ila_input_norm, self.ila_target_norm = data_loader.build_dataloaders(container=self.container, 
-                                                                            frame_length=self.frame_length, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                            arch="ila")
+    def _prepare_loaders_props(self):
+        DATALOADERS_PROPS: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
+            GMP: {"batch_size": self.batch_size,
+                   "batch_size_eval": self.batch_size_eval,
+                   "frame_length": self.frame_length,
+                   "features_extractor": self.features_extractor,
+                   "normalize_method": None},
+            GRU: {"batch_size": self.batch_size,
+                   "batch_size_eval": self.batch_size_eval,
+                   "frame_length": self.frame_length,
+                   "features_extractor": self.features_extractor,
+                   "normalize_method": 'standard'},
+            LSTM: {"batch_size": self.batch_size,
+                   "batch_size_eval": self.batch_size_eval,
+                   "frame_length": self.frame_length,
+                   "features_extractor": self.features_extractor,
+                   "normalize_method": 'standard'},
+            RTDTNN: {"batch_size": self.batch_size,
+                     "batch_size_eval": self.batch_size_eval,
+                     "features_extractor": self.features_extractor,
+                     "normalize_method": 'standard',
+                     "M": self.train_props.get("M"),
+                     "P": self.train_props.get("P")},
+            LEANN: {"batch_size": self.batch_size,
+                    "batch_size_eval": self.batch_size_eval,
+                    "features_extractor": self.features_extractor,
+                    "normalize_method": 'standard',
+                    "M": self.train_props.get("M")},
+        }
+        props = DATALOADERS_PROPS[self.base_model]
+        return props
+    
+    def prepare_loaders(self, arch):
+        train_loader, val_loader, input_norm, target_norm = self.dataloader(self.container,
+                                                                            arch=arch,
+                                                                            **self.loader_props)
+        return train_loader, val_loader, input_norm, target_norm
     
     def _build_optimizer(self, model):
         return torch.optim.AdamW(model.parameters(), lr=self.lr)
@@ -183,6 +143,8 @@ class SimplePipeline:
         is_load = self.pa_model.load_weights()
         optimizer = self._build_optimizer(self.pa_model)
         scheduler = self._build_scheduler(optimizer)
+        
+        train_loader, val_loader, input_norm, target_norm = self.prepare_loaders(arch='pa')
 
         time_train = 0
         if not is_load:
@@ -190,8 +152,8 @@ class SimplePipeline:
             learning.train(net=self.pa_model, 
                     criterion=self.criterion, 
                     optimizer=optimizer, 
-                    train_loader=self.pa_train_loader, 
-                    val_loader=self.pa_val_loader, 
+                    train_loader=train_loader, 
+                    val_loader=val_loader, 
                     grad_clip_val=1.0, 
                     n_epochs=self.epochs, 
                     metric_criterion=self.metric_criterion,
@@ -224,6 +186,8 @@ class SimplePipeline:
                                         model_2=self.pa_model)
         optimizer = self._build_optimizer(self.dla_model)
         scheduler = self._build_scheduler(optimizer)
+        
+        train_loader, val_loader, input_norm, target_norm = self.prepare_loaders(arch='dla')
 
         time_train = 0
         if not is_load:
@@ -231,8 +195,8 @@ class SimplePipeline:
             learning.train(net=casc_dla, 
                         criterion=self.criterion, 
                         optimizer=optimizer, 
-                        train_loader=self.dla_train_loader, 
-                        val_loader=self.dla_val_loader, 
+                        train_loader=train_loader, 
+                        val_loader=val_loader, 
                         grad_clip_val=self.grad_clip_val, 
                         n_epochs=self.epochs, 
                         metric_criterion=self.metric_criterion,
@@ -241,8 +205,8 @@ class SimplePipeline:
             time_train = timedelta(seconds=round(elapsed))
             self.dla_model.save_weights()
         
-        if issubclass(self.base_model, RTDTNN):
-            x_val = data_loader.build_RTDTNN_features(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props["P"])
+        if issubclass(self.base_model, (RTDTNN, LEANN)):
+            x_val = self.features_extractor(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props.get("P"))
         else:
             x_val = self.container.val_input
         
@@ -269,6 +233,8 @@ class SimplePipeline:
         casc_ila_eval = utils.CascadeModel(model_1=self.ila_model, model_2=self.pa_model)
         optimizer = self._build_optimizer(self.ila_model)
         scheduler = self._build_scheduler(optimizer)
+        
+        train_loader, val_loader, input_norm, target_norm = self.prepare_loaders(arch='ila')
 
         time_train = 0
         if not is_load:
@@ -276,8 +242,8 @@ class SimplePipeline:
             learning.train(net=casc_ila_train, 
                         criterion=self.criterion, 
                         optimizer=optimizer, 
-                        train_loader=self.ila_train_loader, 
-                        val_loader=self.ila_val_loader, 
+                        train_loader=train_loader, 
+                        val_loader=val_loader, 
                         grad_clip_val=self.grad_clip_val, 
                         n_epochs=self.epochs, 
                         metric_criterion=self.metric_criterion,
@@ -286,8 +252,8 @@ class SimplePipeline:
             time_train = timedelta(seconds=round(elapsed))
             self.ila_model.save_weights()
         
-        if issubclass(self.base_model, RTDTNN):
-            x_val = data_loader.build_RTDTNN_features(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props["P"])
+        if issubclass(self.base_model, (RTDTNN, LEANN)):
+            x_val = self.features_extractor(self.container.val_input_orig, M=self.train_props["M"], P=self.train_props.get("P"))
         else:
             x_val = self.container.val_input
         
@@ -348,54 +314,19 @@ class SimplePipeline:
         optimizer = self._build_optimizer(self.ilc_model)
         scheduler = self._build_scheduler(optimizer)
         
-        if issubclass(self.base_model, RTDTNN):
-            features_extractor = data_loader.build_RTDTNN_features
-        elif issubclass(self.base_model, LEANN):
-            features_extractor = data_loader.build_LEANN_features
-        else:
-            features_extractor = None
-        
         time_train = 0
         if not is_load:
             self.evaluate_ilc_signal()
             
-        if issubclass(self.base_model, RTDTNN):
-            self.ilc_train_loader, self.ilc_val_loader, self.ilc_input_norm, self.ilc_target_norm = data_loader.build_nn_dataloaders(self.container, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval,
-                                                                            arch="ilc",
-                                                                            features_extractor=features_extractor,
-                                                                            normalize_method='standard',
-                                                                            M=self.train_props["M"], 
-                                                                            P=self.train_props["P"])
-        elif issubclass(self.base_model, LEANN):
-            self.ilc_train_loader, self.ilc_val_loader, self.ilc_input_norm, self.ilc_target_norm = data_loader.build_nn_dataloaders(self.container, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval,
-                                                                            arch="ilc",
-                                                                            features_extractor=features_extractor,
-                                                                            normalize_method='standard',
-                                                                            M=self.train_props["M"])
-        elif issubclass(self.base_model, (GRU, LSTM)):
-            self.ilc_train_loader, self.ilc_val_loader, self.ilc_input_norm, self.ilc_target_norm = data_loader.build_dataloaders(container=self.container, 
-                                                                            frame_length=self.frame_length, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                            arch="ilc",
-                                                                            normalize_method='standard')
-        else:
-            self.ilc_train_loader, self.ilc_val_loader, self.ilc_input_norm, self.ilc_target_norm = data_loader.build_dataloaders(container=self.container, 
-                                                                            frame_length=self.frame_length, 
-                                                                            batch_size=self.batch_size, 
-                                                                            batch_size_eval=self.batch_size_eval, 
-                                                                            arch="ilc")
-            
+        train_loader, val_loader, input_norm, target_norm = self.prepare_loaders(arch='ilc')
+        
+        if not is_load:
             start = time.time()
             learning.train(net=self.ilc_model, 
                         criterion=self.criterion, 
                         optimizer=optimizer, 
-                        train_loader=self.ilc_train_loader, 
-                        val_loader=self.ilc_val_loader, 
+                        train_loader=train_loader, 
+                        val_loader=val_loader, 
                         grad_clip_val=self.grad_clip_val, 
                         n_epochs=self.epochs, 
                         metric_criterion=self.metric_criterion,
@@ -405,22 +336,19 @@ class SimplePipeline:
             self.ilc_model.save_weights()
         
         
-        use_normalize = (self.ilc_input_norm is not None) and (self.ilc_target_norm is not None)
+        use_normalize = (input_norm is not None) and (target_norm is not None)
 
         if use_normalize:
-            x_val = self.ilc_input_norm.transform(self.container.val_input)
+            x_val = input_norm.transform(self.container.val_input)
         else:
             x_val = self.container.val_input
             
-        if issubclass(self.base_model, RTDTNN):
-            x_val = self.ilc_input_norm.transform(self.container.val_input_orig)
-            x_val = features_extractor(x_val, M=self.train_props["M"], P=self.train_props["P"])
-        elif issubclass(self.base_model, LEANN):
-            x_val = self.ilc_input_norm.transform(self.container.val_input_orig)
-            x_val = features_extractor(x_val, M=self.train_props["M"])
+        if issubclass(self.base_model, (RTDTNN, LEANN)):
+            x_val = input_norm.transform(self.container.val_input_orig)
+            x_val = self.features_extractor(x_val, M=self.train_props["M"], P=self.train_props.get("P"))
         
         if use_normalize:
-            casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model, normalizer=self.ilc_target_norm)
+            casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model, normalizer=target_norm)
         else:
             casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model)
             
@@ -462,28 +390,20 @@ class SimplePipeline:
                                                                factor=0.5, 
                                                                patience=10)
 
-        features_extractor = data_loader.build_LEANN_features
-
         time_train = 0
         
         if not is_load:
             self.evaluate_ilc_signal()
         
-        self.ilc_train_loader, self.ilc_val_loader, self.ilc_input_norm, self.ilc_target_norm = data_loader.build_nn_dataloaders(self.container, 
-                                                                        batch_size=self.batch_size, 
-                                                                        batch_size_eval=self.batch_size_eval,
-                                                                        arch="ilc",
-                                                                        features_extractor=features_extractor,
-                                                                        normalize_method='standard',
-                                                                        M=self.train_props["M"])
+        train_loader, val_loader, input_norm, target_norm = self.prepare_loaders(arch='ilc')
 
         if not is_load:
             start = time.time()
             learning.train(net=self.ilc_model, 
                         criterion=self.criterion, 
                         optimizer=optimizer1, 
-                        train_loader=self.ilc_train_loader, 
-                        val_loader=self.ilc_val_loader, 
+                        train_loader=train_loader, 
+                        val_loader=val_loader, 
                         grad_clip_val=self.grad_clip_val, 
                         n_epochs=self.epochs, 
                         metric_criterion=self.metric_criterion,
@@ -499,8 +419,8 @@ class SimplePipeline:
             learning.train(net=self.ilc_model, 
                 criterion=criterion_reg, 
                 optimizer=optimizer2, 
-                train_loader=self.ilc_train_loader, 
-                val_loader=self.ilc_val_loader, 
+                train_loader=train_loader, 
+                val_loader=val_loader, 
                 n_epochs=self.train_props['epochs2'], 
                 metric_criterion=self.metric_criterion,
                 scheduler=scheduler2)
@@ -514,13 +434,13 @@ class SimplePipeline:
             time_train = timedelta(seconds=round(elapsed))
             self.ilc_model.save_weights()
         
-        use_normalize = (self.ilc_input_norm is not None) and (self.ilc_target_norm is not None)
+        use_normalize = (input_norm is not None) and (target_norm is not None)
             
-        x_val = self.ilc_input_norm.transform(self.container.val_input_orig)
-        x_val = features_extractor(x_val, M=self.train_props["M"])
+        x_val = input_norm.transform(self.container.val_input_orig)
+        x_val = self.features_extractor(x_val, M=self.train_props["M"])
         
         if use_normalize:
-            casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model, normalizer=self.ilc_target_norm)
+            casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model, normalizer=target_norm)
         else:
             casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model)
 
