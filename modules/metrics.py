@@ -156,6 +156,55 @@ def noise_realizations(num_realizations, model, x, y_target, acpr_meter):
     return map(lambda x: sum(x) / num_realizations, (nmse_values, acpr_left_values, acpr_right_values))
 
 
+def summarize_statistics(statistics_list):
+    """
+    statistics_list: List[Dict]
+        [{"nmse": float, "acpr": [acpr_l, acpr_r]}, ...]
+
+    Returns:
+        Dict со статистиками
+    """
+
+    nmse_vals = []
+    acpr_l_vals = []
+    acpr_r_vals = []
+
+    for stats in statistics_list:
+        nmse_vals.append(stats["nmse"])
+
+        acpr_l_vals.append(stats["acpr"][0])
+        acpr_r_vals.append(stats["acpr"][1])
+
+    nmse_vals = np.array(nmse_vals)
+    acpr_l_vals = np.array(acpr_l_vals)
+    acpr_r_vals = np.array(acpr_r_vals)
+
+    summary = {
+        "nmse": {
+            "mean": np.mean(nmse_vals),
+            "std": np.std(nmse_vals),
+            "min": np.min(nmse_vals),
+            "max": np.max(nmse_vals),
+        },
+
+        "acpr_l": {
+            "mean": np.mean(acpr_l_vals),
+            "std": np.std(acpr_l_vals),
+            "min": np.min(acpr_l_vals),
+            "max": np.max(acpr_l_vals),
+        },
+
+        "acpr_r": {
+            "mean": np.mean(acpr_r_vals),
+            "std": np.std(acpr_r_vals),
+            "min": np.min(acpr_r_vals),
+            "max": np.max(acpr_r_vals),
+        }
+    }
+
+    return summary
+
+
 class ACPR:
     
     _EPS = 1e-10

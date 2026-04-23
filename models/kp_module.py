@@ -127,21 +127,22 @@ class KPModule(torch.nn.Module):
 
 class KPConvModule(torch.nn.Module):
     def __init__(self,
-                 M: int = 5):
+                 M: int = 5,
+                 K: int = 5):
         
         assert M % 2 == 1, "M must be odd"
         
         torch.nn.Module.__init__(self)
         
         self.M = M
-        self.K= 5
+        self.K = K
         self._EPS = 1e-10
         self.feature_dim = (1 + 3 * self.K * self.K) * 2
         
-        self.conv_reim = torch.nn.Conv1d(in_channels=2, out_channels=2*self.K, kernel_size=self.M, padding=self.M // 2, dilation=1)
-        self.conv_abs1 = torch.nn.Conv1d(in_channels=1, out_channels=self.K, kernel_size=self.M, padding=self.M // 2, dilation=1)
-        self.conv_abs2 = torch.nn.Conv1d(in_channels=1, out_channels=self.K, kernel_size=self.M, padding=self.M // 2, dilation=1)
-        self.conv_abs3 = torch.nn.Conv1d(in_channels=1, out_channels=self.K, kernel_size=self.M, padding=self.M // 2, dilation=1)
+        self.conv_reim = torch.nn.Conv1d(in_channels=2, out_channels=2*K, kernel_size=M, padding='same')
+        self.conv_abs1 = torch.nn.Conv1d(in_channels=1, out_channels=K, kernel_size=M, padding='same')
+        self.conv_abs2 = torch.nn.Conv1d(in_channels=1, out_channels=K, kernel_size=M, padding='same')
+        self.conv_abs3 = torch.nn.Conv1d(in_channels=1, out_channels=K, kernel_size=M, padding='same')
 
         self.activation = torch.nn.Hardswish()
         

@@ -1,9 +1,9 @@
-import torch
-from torch import nn
-import numpy as np
 from typing import Dict, Type, Callable
 import time
 from datetime import timedelta
+import copy
+import torch
+import numpy as np
 from modules import metrics, learning, params, data_loader, utils, prunning
 from modules.config import FRAME_LENGTH, BATCH_SIZE, BATCH_SIZE_EVAL, GRAD_CLIP_VAL, U_K_LR, U_K_EPOCHS
 from models.gmp import GMP
@@ -18,8 +18,8 @@ class SimplePipeline:
     def __init__(self, 
                  container: data_loader.DataContainer, 
                  train_props: Dict, 
-                 base_model: Type[nn.Module],
-                 pa_model: Type[nn.Module] = None):
+                 base_model: Type[torch.nn.Module],
+                 pa_model: Type[torch.nn.Module] = None):
         
         self.base_model = base_model
         self.container = container
@@ -246,13 +246,18 @@ class SimplePipeline:
             "time_train": time_train
         }
         
-    def run_ilc(self):
+    def run_ilc(self, load_weights: bool = True):
         print("Run ILC")
 
         self.ilc_model = self.base_model(**self.model_params, model_name="ilc")
         count_params = self.ilc_model.count_params()
         print(f"count_params: {count_params}")
-        is_load = self.ilc_model.load_weights()
+        
+        if load_weights:
+            is_load = self.ilc_model.load_weights()
+        else:
+            is_load = False
+        
         optimizer = self._build_optimizer(self.ilc_model)
         scheduler = self._build_scheduler(optimizer)
         
@@ -276,7 +281,6 @@ class SimplePipeline:
             elapsed = time.time() - start
             time_train = timedelta(seconds=round(elapsed))
             self.ilc_model.save_weights()
-        
         
         use_normalize = (input_norm is not None) and (target_norm is not None)
 
@@ -313,13 +317,16 @@ class SimplePipeline:
             "count_params": count_params
         }
     
-    def run_ilc_pleann(self):
+    def run_ilc_pleann(self, load_weights: bool = True):
         print("Run ILC")
 
         self.ilc_model = self.base_model(**self.model_params, model_name="ilc_prune")
         count_params = self.ilc_model.count_params()
         print(f"count_params: {count_params}")
-        is_load = self.ilc_model.load_weights()
+        if load_weights:
+            is_load = self.ilc_model.load_weights()
+        else:
+            is_load = False
         
         criterion_reg = metrics.RegLoss(self.ilc_model, 
                                         original_loss=metrics.compute_mse, 
@@ -400,6 +407,37 @@ class SimplePipeline:
             "count_params": count_params
         }
     
+    def evaluate_with_statistics(self, arch: str, n_runs: int = 5):
+        statistics_list = []
+        
+        architectures_registry = {
+            'pa': self.run_pa,
+            'dla': self.run_dla,
+            'ila': self.run_ila,
+            'ilc': self.run_ilc,
+            'ilc_pleann': self.run_ilc_pleann
+        }
+        
+        if arch not in architectures_registry:
+            raise ValueError(f"Unknown architecture: {arch}")
+        
+        arch_method = architectures_registry[arch]
+        
+        for i in range(n_runs):
+            print(f"\n=== Run {i+1}/{n_runs} ===")
+            torch.manual_seed(i)
+            np.random.seed(i)
+            
+            if arch != "pa":
+                self.pa_model = None
+                self.run_pa()
+
+            arch_method()
+            stats = copy.deepcopy(self.results[arch])
+            statistics_list.append(stats)
+        
+        return statistics_list
+    
     def run(self):
         if self.pa_model is None:
             self.run_pa()
@@ -415,6 +453,16 @@ class SimplePipeline:
     
     def reset_u_k_signal(self):
         self.container.reset_ilc()
+    
+    def _reset_model(self, arch):
+        if arch == "pa":
+            self.pa_model = None
+        elif arch == "dla":
+            self.dla_model = None
+        elif arch == "ila":
+            self.ila_model = None
+        elif arch == "ilc":
+            self.ilc_model = None
     
     def get_dpd_model(self, arch: str):
         arch = arch.lower()
