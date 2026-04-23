@@ -3,10 +3,13 @@ import os
 
 
 class BaseModel:
-    def __init__(self, model_name: str = ""):
+    def __init__(self, 
+                 model_name: str = "",
+                 params_directory: str = "model_params"):
         self.model_name = model_name
         self.class_name = self.__class__.__name__
         self._filename = None
+        self.params_directory = params_directory
         self._EPS = 1e-12
     
     def count_params(self) -> int:
@@ -34,14 +37,14 @@ class BaseModel:
     def _get_filename(self):
         raise NotImplementedError
     
-    def save_weights(self, directory: str = "model_params") -> None:
-        os.makedirs(directory, exist_ok=True)
-        full_path = f"{directory}/{self.filename}"
+    def save_weights(self) -> None:
+        os.makedirs(self.params_directory, exist_ok=True)
+        full_path = f"{self.params_directory}/{self.filename}"
         torch.save(self.state_dict(), full_path)
         print(f"Model weights saved to {full_path}")
 
-    def load_weights(self, directory: str = "model_params") -> bool:
-        full_path = f"{directory}/{self.filename}"
+    def load_weights(self) -> bool:
+        full_path = f"{self.params_directory}/{self.filename}"
         if os.path.isfile(full_path):
             state_dict = torch.load(full_path, map_location="cpu")
             self.load_state_dict(state_dict)
