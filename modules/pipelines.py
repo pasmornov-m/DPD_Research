@@ -428,11 +428,10 @@ class SimplePipeline:
             torch.manual_seed(i)
             np.random.seed(i)
             
-            if arch != "pa":
-                self.pa_model = None
-                self.run_pa()
+            if arch != "pa" and self.pa_model is None:
+                raise AttributeError("pa_model not found in pipeline")
 
-            arch_method()
+            arch_method(load_weights=False)
             stats = copy.deepcopy(self.results[arch])
             statistics_list.append(stats)
         

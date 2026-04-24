@@ -2,11 +2,11 @@ from dataclasses import dataclass, asdict
 from typing import Optional, Callable, Dict, Type
 import torch
 from models.gmp import GMP
-from models.gru import GRU
-from models.lstm import LSTM
+from models.gru import GRU, KPGRU
+from models.lstm import LSTM, KPLSTM
 from models.rtdtnn import RTDTNN
 from models.leann import LEANN
-from models.tcn import TCN
+from models.tcn import TCN, KPTCN
 from modules import data_loader
 from modules.config import FRAME_LENGTH, BATCH_SIZE, BATCH_SIZE_EVAL
 
@@ -124,6 +124,26 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
         "hidden_channels": tp["hidden_channels"],
         "kernel_size": tp["kernel_size"],
     },
+    
+    KPLSTM: lambda tp: {
+        "M": tp["M"],
+        "hidden_size": tp["hidden_size"],
+        "num_layers": tp["num_layers"],
+        "bidirectional": tp["bidirectional"],
+    },
+    
+    KPGRU: lambda tp: {
+        "M": tp["M"],
+        "hidden_size": tp["hidden_size"],
+        "num_layers": tp["num_layers"],
+        "bidirectional": tp["bidirectional"],
+    },
+    
+    KPTCN: lambda tp: {
+        "M": tp["M"],
+        "hidden_channels": tp["hidden_channels"],
+        "kernel_size": tp["kernel_size"],
+    },
 }
 
 
@@ -132,6 +152,9 @@ EXTRACTORS_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
     GRU: None,
     LSTM: None,
     TCN: None,
+    KPGRU: None,
+    KPLSTM: None,
+    KPTCN: None,
     RTDTNN: data_loader.build_RTDTNN_features,
     LEANN: data_loader.build_LEANN_features,
 }
@@ -142,6 +165,9 @@ DATALOADERS_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
     GRU: data_loader.build_dataloaders,
     LSTM: data_loader.build_dataloaders,
     TCN: data_loader.build_dataloaders,
+    KPGRU: data_loader.build_dataloaders,
+    KPLSTM: data_loader.build_dataloaders,
+    KPTCN: data_loader.build_dataloaders,
     RTDTNN: data_loader.build_nn_dataloaders,
     LEANN: data_loader.build_nn_dataloaders,
 }
@@ -179,6 +205,24 @@ DATALOADERS_PROPS: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
         "normalize_method": 'standard',
         "M": train_props.get("M")},
     TCN: lambda features_extractor, *args, **kwargs: {
+        "batch_size": BATCH_SIZE,
+        "batch_size_eval": BATCH_SIZE_EVAL,
+        "frame_length": FRAME_LENGTH,
+        "features_extractor": features_extractor,
+        "normalize_method": 'standard'},
+    KPGRU: lambda features_extractor, *args, **kwargs: {
+        "batch_size": BATCH_SIZE,
+        "batch_size_eval": BATCH_SIZE_EVAL,
+        "frame_length": FRAME_LENGTH,
+        "features_extractor": features_extractor,
+        "normalize_method": 'standard'},
+    KPLSTM: lambda features_extractor, *args, **kwargs: {
+        "batch_size": BATCH_SIZE,
+        "batch_size_eval": BATCH_SIZE_EVAL,
+        "frame_length": FRAME_LENGTH,
+        "features_extractor": features_extractor,
+        "normalize_method": 'standard'},
+    KPTCN: lambda features_extractor, *args, **kwargs: {
         "batch_size": BATCH_SIZE,
         "batch_size_eval": BATCH_SIZE_EVAL,
         "frame_length": FRAME_LENGTH,

@@ -41,15 +41,18 @@ class LSTM(BaseModel, torch.nn.Module):
     def forward(self, x, hx=None):
         batch_size = x.size(0)
         
-        if hx is None:
+        h_0, c_0 = hx
+                
+        if h_0 is None:
             h_0 = torch.zeros(self.num_directions * self.num_layers, 
                             batch_size, 
                             self.hidden_size)
+        if c_0 is None:
             c_0 = torch.zeros(self.num_directions * self.num_layers, 
                             batch_size, 
                             self.hidden_size)
         
-        y, hx = self.lstm(x, (h_0, c_0))
+        y, (h_n, c_n) = self.lstm(x, (h_0, c_0))
         y = self.fc(y)
         return y
     
@@ -99,7 +102,7 @@ class KPLSTM(BaseModel, torch.nn.Module):
                                bias=bias)
     
     @utils.complex_handler
-    def forward(self, x, h_0=None, c_0=None):
+    def forward(self, x, h_0=None):
         """
         x: [batch, seq_len, 2]
         """
@@ -109,7 +112,7 @@ class KPLSTM(BaseModel, torch.nn.Module):
         kp = kp_features.reshape(B, T, F * C)
         kp = self.kp_proj(kp)
                 
-        output = self.lstm_model(kp, (h_0, c_0))
+        output = self.lstm_model(kp, h_0)
         
         return output
     
