@@ -1,7 +1,7 @@
 import torch
 from modules import utils
 from models.base_model import BaseModel
-from models.kp_module import KPConvModule
+from models.kp_module import KPConvModule, KPModule
 
 
 
@@ -107,27 +107,34 @@ class TCN(BaseModel, torch.nn.Module):
 class KPTCN(BaseModel, torch.nn.Module):
     def __init__(self,
                  M: int,
-                 in_channels: int = 2,
                  hidden_channels: int = 32,
                  out_channels: int = 2,
                  kernel_size: int = 5,
                  reduced_dim: int = 4,
+                 kp_type: str = 'conv',
                  model_name: str = ""):
         
         torch.nn.Module.__init__(self)
         BaseModel.__init__(self, model_name=model_name)
         
         self.M = M
-        self.in_channels = in_channels
         self.hidden_channels = hidden_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
+        self.kp_type = kp_type
         
-        self.kp_module = KPConvModule(M=M)
-        feature_dim = self.kp_module.get_feature_dim()
+        match kp_type:
+            case 'conv':
+                self.kp_module = KPConvModule(M=M)
+            case 'linear':
+                self.kp_module = KPModule(M=M)
+            case _:
+                raise ValueError(f"Unsupported kp module type: {kp_type}")
+        
+        self.feature_dim = self.kp_module.get_feature_dim()
         self.reduced_dim = reduced_dim
 
-        self.kp_proj = torch.nn.Conv1d(feature_dim, reduced_dim, kernel_size=1)
+        self.kp_proj = torch.nn.Conv1d(self.feature_dim, reduced_dim, kernel_size=1)
 
         self.tcn = TCN(in_channels=reduced_dim,
                        hidden_channels=hidden_channels,
@@ -157,7 +164,7 @@ class KPTCN(BaseModel, torch.nn.Module):
     def _get_filename(self):
         return (
             f"{self.model_name}_{self.class_name}_"
-            f"M{self.M}_"
-            f"ic{self.in_channels}_hc{self.hidden_channels}_"
-            f"oc{self.out_channels}_ks{self.kernel_size}.pt"
+            f"hc{self.hidden_channels}_oc{self.out_channels}_ks{self.kernel_size}_"
+            f"M{self.kp_module.M}_K{self.kp_module.K}_"
+            f"fd{self.feature_dim}_kp{self.kp_type}.pt"
         )

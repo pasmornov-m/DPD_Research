@@ -1,6 +1,6 @@
 import torch
 from models.base_model import BaseModel
-from models.kp_module import KPConvModule
+from models.kp_module import KPConvModule, KPModule
 from modules import utils
 
 
@@ -40,14 +40,11 @@ class LSTM(BaseModel, torch.nn.Module):
     @utils.complex_handler
     def forward(self, x, hx=None):
         batch_size = x.size(0)
-        
-        h_0, c_0 = hx
-                
-        if h_0 is None:
+                        
+        if hx is None:
             h_0 = torch.zeros(self.num_directions * self.num_layers, 
                             batch_size, 
                             self.hidden_size)
-        if c_0 is None:
             c_0 = torch.zeros(self.num_directions * self.num_layers, 
                             batch_size, 
                             self.hidden_size)
@@ -60,7 +57,8 @@ class LSTM(BaseModel, torch.nn.Module):
         return (
             f"{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
-            f"in{self.input_size}_out{self.output_size}_bi{int(self.bidirectional)}.pt")
+            f"in{self.input_size}_out{self.output_size}_bi{int(self.bidirectional)}.pt"
+        )
 
 
 class KPLSTM(BaseModel, torch.nn.Module):
@@ -73,12 +71,21 @@ class KPLSTM(BaseModel, torch.nn.Module):
                  bidirectional: bool = False, 
                  batch_first: bool = True,
                  bias: bool = True, 
+                 kp_type: str = 'conv',
                  model_name: str = ""):
         
         torch.nn.Module.__init__(self)
         BaseModel.__init__(self, model_name=model_name)
         
-        self.kp_module = KPConvModule(M=M)
+        self.kp_type = kp_type
+        
+        match kp_type:
+            case 'conv':
+                self.kp_module = KPConvModule(M=M)
+            case 'linear':
+                self.kp_module = KPModule(M=M)
+            case _:
+                raise ValueError(f"Unsupported kp module type: {kp_type}")
         
         self.feature_dim = self.kp_module.get_feature_dim()
         
@@ -112,7 +119,7 @@ class KPLSTM(BaseModel, torch.nn.Module):
         kp = kp_features.reshape(B, T, F * C)
         kp = self.kp_proj(kp)
                 
-        output = self.lstm_model(kp, h_0)
+        output = self.lstm_model(kp)
         
         return output
     
@@ -121,5 +128,6 @@ class KPLSTM(BaseModel, torch.nn.Module):
             f"{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
             f"out{self.output_size}_bi{int(self.bidirectional)}_"
-            f"fd{self.feature_dim}_M{self.kp_module.M}_K{self.kp_module.K}.pt"
+            f"M{self.kp_module.M}_K{self.kp_module.K}_"
+            f"fd{self.feature_dim}_kp{self.kp_type}.pt"
         )

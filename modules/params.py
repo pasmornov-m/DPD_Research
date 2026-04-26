@@ -130,6 +130,7 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
         "hidden_size": tp["hidden_size"],
         "num_layers": tp["num_layers"],
         "bidirectional": tp["bidirectional"],
+        "kp_type": tp.get("kp_type", default="conv"),
     },
     
     KPGRU: lambda tp: {
@@ -137,12 +138,14 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
         "hidden_size": tp["hidden_size"],
         "num_layers": tp["num_layers"],
         "bidirectional": tp["bidirectional"],
+        "kp_type": tp.get("kp_type", default="conv"),
     },
     
     KPTCN: lambda tp: {
         "M": tp["M"],
         "hidden_channels": tp["hidden_channels"],
         "kernel_size": tp["kernel_size"],
+        "kp_type": tp.get("kp_type", default="conv"),
     },
 }
 

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from models.base_model import BaseModel
-from models.kp_module import KPConvModule
+from models.kp_module import KPConvModule, KPModule
 from modules import utils
 
 
@@ -60,7 +60,8 @@ class GRU(BaseModel, torch.nn.Module):
         return (
             f"{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
-            f"in{self.input_size}_out{self.output_size}_bi{int(self.bidirectional)}.pt")
+            f"in{self.input_size}_out{self.output_size}_bi{int(self.bidirectional)}.pt"
+        )
 
 
 class KPGRU(BaseModel, torch.nn.Module):
@@ -73,12 +74,21 @@ class KPGRU(BaseModel, torch.nn.Module):
                  bidirectional: bool = False, 
                  batch_first: bool = True,
                  bias: bool = True, 
+                 kp_type: str = 'conv',
                  model_name: str = ""):
         
         torch.nn.Module.__init__(self)
         BaseModel.__init__(self, model_name=model_name)
         
-        self.kp_module = KPConvModule(M=M)
+        self.kp_type = kp_type
+        
+        match kp_type:
+            case 'conv':
+                self.kp_module = KPConvModule(M=M)
+            case 'linear':
+                self.kp_module = KPModule(M=M)
+            case _:
+                raise ValueError(f"Unsupported kp module type: {kp_type}")
         
         self.feature_dim = self.kp_module.get_feature_dim()
         
@@ -122,5 +132,5 @@ class KPGRU(BaseModel, torch.nn.Module):
             f"hs{self.hidden_size}_nl{self.num_layers}_"
             f"out{self.output_size}_bi{int(self.bidirectional)}_"
             f"M{self.kp_module.M}_K{self.kp_module.K}_"
-            f"fd{self.feature_dim}_M{self.kp_module.M}_K{self.kp_module.K}.pt"
+            f"fd{self.feature_dim}_kp{self.kp_type}.pt"
         )
