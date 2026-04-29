@@ -148,7 +148,7 @@ def noise_realizations(num_realizations, model, x, y_target, acpr_meter):
     
     nmse_values, acpr_left_values, acpr_right_values = [], [], []
     for _ in range(num_realizations):
-        y_noise = learning.net_inference(net=model, x=x)
+        y_noise = learning.net_inference(net=model, x=x).detach()
         nmse_values.append(compute_nmse(y_noise, y_target))
         acpr_left, acpr_right = calculate_acpr(y_noise, acpr_meter)
         acpr_left_values.append(acpr_left)
