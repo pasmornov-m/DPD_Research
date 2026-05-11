@@ -128,6 +128,6 @@ class KPLSTM(BaseModel, torch.nn.Module):
             f"{self.model_name}_{self.class_name}_"
             f"hs{self.hidden_size}_nl{self.num_layers}_"
             f"out{self.output_size}_bi{int(self.bidirectional)}_"
-            f"M{self.kp_module.M}_K{self.kp_module.K}_"
+            f"M{self.kp_module.M}_K{self.kp_module.K}_rd{self.reduced_dim}_"
             f"fd{self.feature_dim}_kp{self.kp_type}.pt"
         )

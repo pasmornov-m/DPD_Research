@@ -134,7 +134,7 @@ class KPTCN(BaseModel, torch.nn.Module):
         self.feature_dim = self.kp_module.get_feature_dim()
         self.reduced_dim = reduced_dim
 
-        self.kp_proj = torch.nn.Conv1d(self.feature_dim, reduced_dim, kernel_size=1)
+        self.kp_proj = torch.nn.Linear(self.feature_dim, reduced_dim)
 
         self.tcn = TCN(in_channels=reduced_dim,
                        hidden_channels=hidden_channels,
@@ -153,9 +153,9 @@ class KPTCN(BaseModel, torch.nn.Module):
         B, T, F, C = kp_features.shape
         kp = kp_features.reshape(B, T, F * C)
         
-        kp = kp.transpose(1, 2)
+        # kp = kp.transpose(1, 2)
         kp = self.kp_proj(kp)
-        kp = kp.transpose(1, 2)
+        # kp = kp.transpose(1, 2)
         
         out = self.tcn(kp)
         
@@ -165,6 +165,6 @@ class KPTCN(BaseModel, torch.nn.Module):
         return (
             f"{self.model_name}_{self.class_name}_"
             f"hc{self.hidden_channels}_oc{self.out_channels}_ks{self.kernel_size}_"
-            f"M{self.kp_module.M}_K{self.kp_module.K}_"
+            f"M{self.kp_module.M}_K{self.kp_module.K}_rd{self.reduced_dim}_"
             f"fd{self.feature_dim}_kp{self.kp_type}.pt"
         )

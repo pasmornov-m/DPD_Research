@@ -80,14 +80,14 @@ def make_snr_params(snr_range: list,
 MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
 
     GMP: lambda tp: make_gmp_params(
-        Ka=tp["gmp_degree"],
-        La=tp["gmp_degree"],
-        Kb=tp["gmp_degree"],
-        Lb=tp["gmp_degree"],
-        Mb=tp["gmp_degree"],
-        Kc=tp["gmp_degree"],
-        Lc=tp["gmp_degree"],
-        Mc=tp["gmp_degree"],
+        Ka=tp.get("gmp_degree"),
+        La=tp.get("gmp_degree"),
+        Kb=tp.get("gmp_degree"),
+        Lb=tp.get("gmp_degree"),
+        Mb=tp.get("gmp_degree"),
+        Kc=tp.get("gmp_degree"),
+        Lc=tp.get("gmp_degree"),
+        Mc=tp.get("gmp_degree"),
     ),
 
     GRU: lambda tp: {
@@ -130,7 +130,8 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
         "hidden_size": tp["hidden_size"],
         "num_layers": tp["num_layers"],
         "bidirectional": tp["bidirectional"],
-        "kp_type": tp.get("kp_type", default="conv"),
+        "kp_type": tp.get("kp_type", "conv"),
+        "reduced_dim": tp.get("reduced_dim", 4),
     },
     
     KPGRU: lambda tp: {
@@ -138,14 +139,16 @@ MODEL_REGISTRY: Dict[Type[torch.nn.Module], Callable[[Dict], Dict]] = {
         "hidden_size": tp["hidden_size"],
         "num_layers": tp["num_layers"],
         "bidirectional": tp["bidirectional"],
-        "kp_type": tp.get("kp_type", default="conv"),
+        "kp_type": tp.get("kp_type", "conv"),
+        "reduced_dim": tp.get("reduced_dim", 4),
     },
     
     KPTCN: lambda tp: {
         "M": tp["M"],
         "hidden_channels": tp["hidden_channels"],
         "kernel_size": tp["kernel_size"],
-        "kp_type": tp.get("kp_type", default="conv"),
+        "kp_type": tp.get("kp_type", "conv"),
+        "reduced_dim": tp.get("reduced_dim", 4),
     },
 }
 

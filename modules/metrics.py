@@ -156,7 +156,7 @@ def noise_realizations(num_realizations, model, x, y_target, acpr_meter):
     return map(lambda x: sum(x) / num_realizations, (nmse_values, acpr_left_values, acpr_right_values))
 
 
-def summarize_statistics(statistics_list):
+def summarize_statistics(statistics_list, r_order: int = 2):
     """
     statistics_list: List[Dict]
         [{"nmse": float, "acpr": [acpr_l, acpr_r]}, ...]
@@ -181,24 +181,24 @@ def summarize_statistics(statistics_list):
 
     summary = {
         "nmse": {
-            "mean": np.mean(nmse_vals),
-            "std": np.std(nmse_vals),
-            "min": np.min(nmse_vals),
-            "max": np.max(nmse_vals),
+            "mean": np.round(np.mean(nmse_vals), r_order),
+            "std": np.round(np.std(nmse_vals), r_order),
+            "min": np.round(np.min(nmse_vals), r_order),
+            "max": np.round(np.max(nmse_vals), r_order),
         },
 
         "acpr_l": {
-            "mean": np.mean(acpr_l_vals),
-            "std": np.std(acpr_l_vals),
-            "min": np.min(acpr_l_vals),
-            "max": np.max(acpr_l_vals),
+            "mean": np.round(np.mean(acpr_l_vals), r_order),
+            "std": np.round(np.std(acpr_l_vals), r_order),
+            "min": np.round(np.min(acpr_l_vals), r_order),
+            "max": np.round(np.max(acpr_l_vals), r_order),
         },
 
         "acpr_r": {
-            "mean": np.mean(acpr_r_vals),
-            "std": np.std(acpr_r_vals),
-            "min": np.min(acpr_r_vals),
-            "max": np.max(acpr_r_vals),
+            "mean": np.round(np.mean(acpr_r_vals), r_order),
+            "std": np.round(np.std(acpr_r_vals), r_order),
+            "min": np.round(np.min(acpr_r_vals), r_order),
+            "max": np.round(np.max(acpr_r_vals), r_order),
         }
     }
 

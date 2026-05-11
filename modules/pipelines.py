@@ -56,6 +56,8 @@ class SimplePipeline:
         
         self._prepare_model_params()
         self.loader_props = params.DATALOADERS_PROPS[self.base_model](self.features_extractor, self.train_props)
+        
+        self.count_params = self.base_model(**self.model_params).count_params()
     
     def _prepare_model_params(self):
         try:
@@ -313,22 +315,14 @@ class SimplePipeline:
             time_train = timedelta(seconds=round(elapsed))
             self.ilc_model.save_weights()
         
-        use_normalize = (input_norm is not None) and (target_norm is not None)
-
-        if use_normalize:
-            x_val = input_norm.transform(self.container.val_input)
-        else:
-            x_val = self.container.val_input
+        x_val = input_norm.transform(self.container.val_input)
             
         if issubclass(self.base_model, (RTDTNN, LEANN)):
             x_val = input_norm.transform(self.container.val_input_orig)
             x_val = self.features_extractor(x_val, M=self.train_props["M"], P=self.train_props.get("P"))
         
-        if use_normalize:
-            casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model, normalizer=target_norm)
-        else:
-            casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model)
-            
+        casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model, normalizer=target_norm)
+        
         # if issubclass(self.base_model, RTDTNN):
         #     casc_ilc_eval = utils.CascadeModel(model_1=self.ilc_model, model_2=self.pa_model)
         
@@ -480,6 +474,9 @@ class SimplePipeline:
     
     def get_pa_model(self):
         return self.pa_model
+    
+    def get_count_params(self) -> int:
+        return self.count_params
     
     def reset_u_k_signal(self):
         self.container.reset_ilc()
