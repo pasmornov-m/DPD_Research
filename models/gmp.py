@@ -76,7 +76,7 @@ class GMP(BaseModel, nn.Module):
             return torch.gather(x_exp, dim=2, index=indices)
         else:
             l_broadcast = arange_L.view(-1, 1, 1)
-            m_broadcast = torch.arange(M, device=t_idx.device).view(1, -1, 1)
+            m_broadcast = torch.arange(M).view(1, -1, 1)
             lm_indices = (t_idx[None, None, :] - l_broadcast - m_broadcast).long()
             lm_indices = lm_indices.unsqueeze(0).unsqueeze(-1).expand(x_padded.size(0), -1, -1, -1, 2)
             x_exp = x_padded.unsqueeze(1).unsqueeze(1).expand(-1, L, M, -1, -1)
@@ -89,7 +89,7 @@ class GMP(BaseModel, nn.Module):
             x_padded = torch.cat([pad, x], dim=1)
         else:
             x_padded = x
-        t_idx = torch.arange(max_delay - 1, max_delay - 1 + T, device=x.device)
+        t_idx = torch.arange(max_delay - 1, max_delay - 1 + T)
         return x_padded, t_idx
 
     def _term_a(self, x_padded, t_idx):
@@ -138,7 +138,7 @@ class GMP(BaseModel, nn.Module):
         term_b = self._term_b(x_padded, t_idx)
         term_c = self._term_c(x_padded, t_idx)
 
-        y = torch.zeros(B, T, dtype=torch.complex64, device=x.device)
+        y = torch.zeros(B, T, dtype=torch.complex64)
 
         if term_a is not None:
             y += torch.einsum('bltk,k l->bt', term_a, self.a)
@@ -148,3 +148,218 @@ class GMP(BaseModel, nn.Module):
             y += torch.einsum('blmtk,k l m->bt', term_c, self.c)
 
         return torch.view_as_real(y)
+
+    def count_flops(self) -> int:
+        """
+        Approximate FLOPs estimation for GMP model.
+
+        FLOPs are counted for:
+        - one output sample (one time step)
+
+        Notes
+        -----
+
+        Assumptions:
+        - add/sub/mul        : 1 FLOP
+        - complex add        : 2 FLOPs
+        - complex mul        : 6 FLOPs
+        - abs(complex)       : 3 FLOPs
+        - sqrt               : 1 FLOP (absorbed in abs)
+        - power x**K         : (K - 1) multiplications
+        - einsum             : 2 FLOPs per real multiply-add
+
+        Returns
+        -------
+        int: FLOPs per one output sample
+        """
+
+        Ka, La = self.Ka, self.La
+        Kb, Lb, Mb = self.Kb, self.Lb, self.Mb
+        Kc, Lc, Mc = self.Kc, self.Lc, self.Mc
+
+        # TERM A
+        # y = x[n-l] * |x[n-l]|^k
+
+        # abs(x)
+        abs_a = La * 3
+
+        # power
+        pow_a = La * Ka
+
+        # multiplication complex * real power
+        mul_a = La * Ka * 2   # complex * real scalar
+
+        term_a = La * (abs_a + pow_a) + mul_a
+
+        # TERM B
+        # x[n-l] * x[n-l-m] * |x[n-l-m]|^k
+
+        abs_b = Lb * Mb * 3
+        pow_b = Lb * Mb * Kb
+
+        # complex multiplication:
+        # x * delayed_x -> 6 FLOPs
+        cross_mul = Lb * Mb * 6
+
+        mul_b = Lb * Mb * Kb * 2
+
+        term_b = abs_b + pow_b + cross_mul + mul_b
+
+        # TERM C
+        # |x[n-l]|^k * x[n-l-m]
+
+        abs_c = Lc * Mc * 3
+        pow_c = Lc * Mc * Kc
+
+        cross_mul_c = Lc * Mc * 6
+
+        term_c = abs_c + pow_c + cross_mul_c
+
+        # EINSUM + COEFFICIENT SUM
+
+        # einsum reductions:
+        # term_a: k,l -> t  => approx 2 ops per accumulation
+        einsum_a = Ka * La * 2
+
+        # term_b: k,l,m -> t
+        einsum_b = Kb * Lb * Mb * 2
+
+        # term_c: k,l,m -> t
+        einsum_c = Kc * Lc * Mc * 2
+
+        # coefficient multiplications (complex)
+        coeff_a = Ka * La * 6
+        coeff_b = Kb * Lb * Mb * 6
+        coeff_c = Kc * Lc * Mc * 6
+
+        # TOTAL
+
+        total_flops = (
+            term_a + term_b + term_c +
+            einsum_a + einsum_b + einsum_c +
+            coeff_a + coeff_b + coeff_c
+        )
+
+        return int(total_flops)
+    
+    def count_macs(self, sequence_length: int = 1) -> int:
+        """
+        Approximate MACs estimation for GMP model.
+
+        Counts only:
+        - multiplications
+        - accumulations
+
+        Does NOT count:
+        - abs()
+        - sqrt()
+        - tensor indexing/gather
+        - padding
+        - reshape/view
+        - memory access overhead
+
+        Notes
+        -----
+        Complexity is estimated for:
+        - one forward pass
+        - one batch sample
+
+        Parameters
+        ----------
+        sequence_length : int
+            Temporal sequence length T.
+
+        Returns
+        -------
+        int
+            MACs per forward pass.
+        """
+
+        T = sequence_length
+
+        Ka, La = self.Ka, self.La
+        Kb, Lb, Mb = self.Kb, self.Lb, self.Mb
+        Kc, Lc, Mc = self.Kc, self.Lc, self.Mc
+
+        total_mac = 0
+
+        # TERM A
+        #
+        # x[n-l] * |x[n-l]|^k
+        #
+        # For each element:
+        # - power: k multiplications (approx)
+        # - multiply by complex sample: 1
+        #
+        # Total:
+        # T * La * Ka * (k + 1)
+        #
+        # einsum accumulation:
+        # T * La * Ka
+
+        if La > 0 and Ka > 0:
+
+            # power multiplications
+            power_mac_a = T * La * sum(range(Ka))
+
+            # multiply with x
+            mult_mac_a = T * La * Ka
+
+            # einsum accumulation
+            reduce_mac_a = T * (La * Ka - 1)
+
+            term_a_mac = (
+                power_mac_a
+                + mult_mac_a
+                + reduce_mac_a
+            )
+
+            total_mac += term_a_mac
+
+        # TERM B
+        #
+        # x[n-l] * |x[n-l-m]|^k
+        #
+        # Shape:
+        # [Lb, Mb, Kb]
+
+        if Lb > 0 and Mb > 0 and Kb > 0:
+
+            power_mac_b = T * Lb * Mb * sum(range(Kb))
+
+            mult_mac_b = T * Lb * Mb * Kb
+
+            reduce_mac_b = T * (Lb * Mb * Kb - 1)
+
+            term_b_mac = (
+                power_mac_b
+                + mult_mac_b
+                + reduce_mac_b
+            )
+
+            total_mac += term_b_mac
+
+        # TERM C
+        #
+        # x[n-l] * |x[n-l+m]|^k
+        #
+        # Shape:
+        # [Lc, Mc, Kc]
+
+        if Lc > 0 and Mc > 0 and Kc > 0:
+
+            power_mac_c = T * Lc * Mc * sum(range(Kc))
+
+            mult_mac_c = T * Lc * Mc * Kc
+
+            reduce_mac_c = T * (Lc * Mc * Kc - 1)
+
+            term_c_mac = (
+                power_mac_c
+                + mult_mac_c
+                + reduce_mac_c
+            )
+
+            total_mac += term_c_mac
+
+        return int(total_mac)

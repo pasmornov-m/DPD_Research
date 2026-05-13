@@ -183,7 +183,7 @@ class CascadeModel(nn.Module):
 
 
 class Normalizer:
-    def __init__(self, method="standard"):
+    def __init__(self, method: str | None = "standard"):
         """
         Args:
             method (str): 'minmax' для масштабирования в [0, 1], 
@@ -222,6 +222,8 @@ class Normalizer:
                 return x / (self.params['scale'] + self._eps)
             case None:
                 return x
+            case _:
+                return x
 
     def inverse_transform(self, x_norm: torch.Tensor) -> torch.Tensor:
         """Денормализует x"""
@@ -233,6 +235,8 @@ class Normalizer:
             case "power":
                 return x_norm * self.params['scale']
             case None:
+                return x_norm
+            case _:
                 return x_norm
 
     def fit_transform(self, x: torch.Tensor) -> torch.Tensor:

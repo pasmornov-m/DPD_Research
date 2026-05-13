@@ -82,8 +82,12 @@ class SimplePipeline:
     def run_pa(self):
         print("Run PA")
         self.pa_model = self.base_model(**self.model_params, model_name="pa")
+        
         count_params = self.pa_model.count_params()
+        count_macs = self.pa_model.count_macs()
         print(f"count_params: {count_params}")
+        print(f"count_macs: {count_macs}")
+        
         is_load = self.pa_model.load_weights()
         optimizer = self._build_optimizer(self.pa_model)
         scheduler = self._build_scheduler(optimizer)
@@ -117,14 +121,19 @@ class SimplePipeline:
             "acpr": pa_model_acpr,
             "y_val_pa_model": y_val_pa_model,
             "time_train": time_train,
-            "count_params": count_params
+            "count_params": count_params,
+            "count_macs": count_macs,
         }
     
     def run_dla(self):
         print("Run DLA")
         self.dla_model = self.base_model(**self.model_params, model_name="dla")
+        
         count_params = self.dla_model.count_params()
+        count_macs = self.dla_model.count_macs()
         print(f"count_params: {count_params}")
+        print(f"count_macs: {count_macs}")
+        
         is_load = self.dla_model.load_weights()
         casc_dla = utils.CascadeModel(model_1=self.dla_model, 
                                         model_2=self.pa_model)
@@ -180,14 +189,19 @@ class SimplePipeline:
             "acpr": dla_acpr,
             "y_val_dla": y_val_dla,
             "time_train": time_train,
-            "count_params": count_params
+            "count_params": count_params,
+            "count_macs": count_macs,
         }
 
     def run_ila(self):
         print("Run ILA")
         self.ila_model = self.base_model(**self.model_params, model_name="ila")
+        
         count_params = self.ila_model.count_params()
+        count_macs = self.ila_model.count_macs()
         print(f"count_params: {count_params}")
+        print(f"count_macs: {count_macs}")
+        
         is_load = self.ila_model.load_weights()
         casc_ila_train = utils.CascadeModel(model_1=self.pa_model, model_2=self.ila_model, gain=self.container.gain, cascade_type="ila")
         optimizer = self._build_optimizer(self.ila_model)
@@ -242,7 +256,8 @@ class SimplePipeline:
             "acpr": ila_acpr,
             "y_val_ila": y_val_ila,
             "time_train": time_train,
-            "count_params": count_params
+            "count_params": count_params,
+            "count_macs": count_macs,
         }
     
     def evaluate_ilc_signal(self):
@@ -283,8 +298,11 @@ class SimplePipeline:
         print("Run ILC")
 
         self.ilc_model = self.base_model(**self.model_params, model_name="ilc")
+        
         count_params = self.ilc_model.count_params()
+        count_macs = self.ilc_model.count_macs()
         print(f"count_params: {count_params}")
+        print(f"count_macs: {count_macs}")
         
         if load_weights:
             is_load = self.ilc_model.load_weights()
@@ -339,15 +357,20 @@ class SimplePipeline:
             "acpr": ilc_acpr,
             "y_val_ilc": y_val_ilc,
             "time_train": time_train,
-            "count_params": count_params
+            "count_params": count_params,
+            "count_macs": count_macs,
         }
     
     def run_ilc_pleann(self, load_weights: bool = True):
         print("Run ILC")
 
         self.ilc_model = self.base_model(**self.model_params, model_name="ilc_prune")
+        
         count_params = self.ilc_model.count_params()
+        count_macs = self.ilc_model.count_macs()
         print(f"count_params: {count_params}")
+        print(f"count_macs: {count_macs}")
+        
         if load_weights:
             is_load = self.ilc_model.load_weights()
         else:
@@ -429,7 +452,8 @@ class SimplePipeline:
             "acpr": ilc_acpr,
             "y_val_ilc": y_val_ilc,
             "time_train": time_train,
-            "count_params": count_params
+            "count_params": count_params,
+            "count_macs": count_macs,
         }
     
     def evaluate_with_statistics(self, arch: str, n_runs: int = 5):

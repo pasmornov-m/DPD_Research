@@ -124,6 +124,174 @@ class KPModule(torch.nn.Module):
         
         return kp_features
 
+    def count_flops(self) -> int:
+        """
+        Approximate FLOPs estimation for KPModule.
+
+        FLOPs are counted for:
+        - one output sample (one sequence)
+
+        Notes
+        -----
+
+        Assumptions:
+        - add/sub/mul        : 1 FLOP
+        - sqrt               : 10 FLOPs
+        - Hardswish          : 6 FLOPs (approx)
+        - Linear             : 2 * in * out
+        - abs/square         : 1 FLOP each
+        - memory build (unfold/concat): ignored or minimal cost
+
+        Returns
+        -------
+        int: FLOPs per one output sample
+        """
+
+        M = self.M
+        K = self.K
+
+        # MEMORY BUILD (approx ignored)
+
+        memory_flops = 0
+
+        # FEATURE SPLIT
+
+        # magnitude2 = re^2 + im^2
+        mag2_flops = 2 * M  # per window element
+
+        # sqrt
+        abs1_flops = 10 * M
+
+        # abs2 = magnitude2
+        abs2_flops = 0
+
+        # abs3 = abs1 * magnitude2
+        abs3_flops = M
+
+        split_flops = mag2_flops + abs1_flops + abs2_flops + abs3_flops
+
+        # LINEAR PROJECTIONS
+
+        # Linear(x_concat: 2M -> K)
+        lin_re = 2 * (2 * M) * K
+        lin_im = 2 * (2 * M) * K
+
+        # Linear(abs1: M -> K)
+        lin_abs1 = 2 * M * K
+        lin_abs2 = 2 * M * K
+        lin_abs3 = 2 * M * K
+
+        linear_total = lin_re + lin_im + lin_abs1 + lin_abs2 + lin_abs3
+
+        # activations (5 branches)
+        activation_total = 6 * (5 * K * M)
+
+        # KRONECKER PRODUCTS
+
+        # 3 magnitude branches × (real + imag) = 6 kron products
+        kron_size = K * K
+
+        kron_flops = 6 * kron_size * 1  # elementwise multiplications
+
+        # CONCAT + STACK (ignored)
+
+        concat_flops = 0
+
+        # TOTAL
+
+        total_flops = (
+            memory_flops
+            + split_flops
+            + linear_total
+            + activation_total
+            + kron_flops
+            + concat_flops
+        )
+
+        return int(total_flops)
+
+    def count_macs(self, sequence_length: int = 1) -> int:
+        """
+        Approximate MACs estimation for KPModule.
+
+        Counts only:
+        - multiplications
+        - accumulations (implicit in Linear / matmul)
+
+        Does NOT count:
+        - activations (Hardswish)
+        - sqrt, add, concat, reshape, unfold
+        - bias additions
+
+        Notes
+        -----
+        Complexity is estimated for:
+        - one forward pass
+        - one sample
+        - full sequence length
+
+        Parameters
+        ----------
+        sequence_length : int
+            Temporal length N.
+
+        Returns
+        -------
+        int
+            MACs per forward pass.
+        """
+
+        N = sequence_length
+        M = self.M
+        K = self.K
+
+        total_mac = 0
+
+        # LINEAR PROJECTIONS (5 branches)
+        #
+        # Each Linear: in_features * out_features
+        # applied per timestep
+
+        mac_linear_re = N * (2 * M) * K
+        mac_linear_im = N * (2 * M) * K
+
+        mac_linear_abs1 = N * M * K
+        mac_linear_abs2 = N * M * K
+        mac_linear_abs3 = N * M * K
+
+        total_mac += (
+            mac_linear_re
+            + mac_linear_im
+            + mac_linear_abs1
+            + mac_linear_abs2
+            + mac_linear_abs3
+        )
+
+        # KRONECKER PRODUCTS
+        #
+        # kron(a,b): (B,N,K) ⊗ (B,N,K)
+        # = elementwise multiplication over K×K
+        #
+        # cost: K^2 multiplications per element pair
+        #
+        # we have 3 pairs:
+        # (z_re, z_abs*)
+        # (z_im, z_abs*)
+
+        kron_per_pair = N * (K * K)
+
+        mac_kron = 6 * kron_per_pair  # 3 abs paths × real+imag
+
+        total_mac += mac_kron
+
+        # MEMORY BUILDING + CONCAT + SPLITS
+        #
+        # ignored (no MAC definition impact)
+
+        return int(total_mac)
+
+
+
 
 class KPConvModule(torch.nn.Module):
     def __init__(self,
@@ -264,3 +432,177 @@ class KPConvModule(torch.nn.Module):
         kp_features = torch.stack([real_concat, imag_concat], dim=-1)  # (B, N, total_features, 2)
         
         return kp_features
+
+    def count_flops(self) -> int:
+        """
+        Approximate FLOPs estimation for KPConvModule.
+
+        FLOPs are counted for:
+        - one output sample (one sequence)
+
+        Notes
+        -----
+
+        Assumptions:
+        - add/sub/mul      : 1 FLOP
+        - sqrt             : 10 FLOPs
+        - Hardswish        : 6 FLOPs (approx)
+        - Conv1d           : 2 * Cin * Cout * K
+        - elementwise mul  : 1 FLOP
+
+        Returns
+        -------
+        int: FLOPs per one output sample
+        """
+
+        M = self.M
+        K = self.K
+
+        # FEATURE SPLIT
+
+        # x_re^2 + x_im^2
+        mag2_flops = 2  # mul + add
+
+        # sqrt(mag2)
+        abs1_flops = 10
+
+        # abs2 = magnitude2
+        abs2_flops = 0
+
+        # abs3 = abs1 * magnitude2
+        abs3_flops = 1
+
+        split_flops = mag2_flops + abs1_flops + abs2_flops + abs3_flops
+
+        # CONV1D PROJECTIONS
+
+        # conv_reim: (2 -> 2K, kernel M)
+        conv_reim = 2 * 2 * K * M
+
+        # conv_abs1: (1 -> K)
+        conv_abs1 = 2 * 1 * K * M
+
+        # conv_abs2
+        conv_abs2 = 2 * 1 * K * M
+
+        # conv_abs3
+        conv_abs3 = 2 * 1 * K * M
+
+        conv_total = conv_reim + conv_abs1 + conv_abs2 + conv_abs3
+
+        # activation Hardswish (4 conv outputs)
+        # channels: 2K + 3K = 5K
+        activation_flops = 6 * (5 * K)
+
+        # KRONECKER PRODUCTS
+
+        # each kron: (B, N, K) ⊗ (B, N, K)
+        # elementwise multiplication + reshape
+
+        kron_size = K * K
+
+        # 3 magnitudes × 2 (real + imag) = 6 kron products
+        kron_flops = 6 * kron_size
+
+        # CONCAT OPERATIONS
+
+        # concatenation is free (no FLOPs)
+
+        # FINAL OUTPUT ASSEMBLY
+
+        # stacking real/imag
+        stack_flops = 0
+
+        total_flops = (
+            split_flops
+            + conv_total
+            + activation_flops
+            + kron_flops
+            + stack_flops
+        )
+
+        return int(total_flops)
+
+    def count_macs(self, sequence_length: int = 1) -> int:
+        """
+        Approximate MACs estimation for KPConvModule.
+
+        Counts only:
+        - multiplications + accumulations in Conv1d
+
+        Does NOT count:
+        - activations (Hardswish)
+        - sqrt / arithmetic feature engineering
+        - concat / transpose / reshape / split
+        - bias
+
+        Notes
+        -----
+        Complexity is estimated for:
+        - one forward pass
+        - one sample
+        - full sequence length
+
+        Parameters
+        ----------
+        sequence_length : int
+            Temporal length N.
+
+        Returns
+        -------
+        int
+            MACs per forward pass.
+        """
+
+        N = sequence_length
+        M = self.M
+        K = self.K
+
+        total_mac = 0
+
+        # CONV BLOCKS
+        #
+        # MACs Conv1d:
+        # out_channels * in_channels * kernel_size * N
+        #
+
+        # conv_reim: (2 -> 2K)
+        mac_reim = (
+            N
+            * (2 * K)
+            * 2
+            * M
+        )
+
+        # conv_abs1: (1 -> K)
+        # conv_abs2: (1 -> K)
+        # conv_abs3: (1 -> K)
+
+        mac_abs = (
+            3
+            * (
+                N
+                * K
+                * 1
+                * M
+            )
+        )
+
+        total_mac += mac_reim + mac_abs
+
+        # FEATURE ENGINEERING + KRONECKER
+        #
+        # ignored:
+        # - sqrt
+        # - magnitude
+        # - reshape/split/transpose
+        #
+        # KRONECKER:
+        # 3 pairs × (real + imag) = 6 tensors
+        # each: K×K multiplications per timestep
+
+        mac_kron = 6 * N * (K * K)
+
+        total_mac += mac_kron
+
+        return int(total_mac)
