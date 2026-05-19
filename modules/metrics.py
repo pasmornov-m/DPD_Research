@@ -56,6 +56,9 @@ def calculate_am_am(input_data: torch.Tensor, output_data: torch.Tensor) -> Tupl
 def calculate_am_pm(input_data: torch.Tensor, output_data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     assert input_data.shape == output_data.shape, "input_data and output_data must have the same shape"
     
+    input_data = iq_to_complex(input_data)
+    output_data = iq_to_complex(output_data)
+    
     input_amplitude = torch.abs(input_data)
     valid_indices = input_amplitude > 1e-20
 
@@ -181,24 +184,24 @@ def summarize_statistics(statistics_list, r_order: int = 2):
 
     summary = {
         "nmse": {
-            "mean": np.round(np.mean(nmse_vals), r_order),
-            "std": np.round(np.std(nmse_vals), r_order),
-            "min": np.round(np.min(nmse_vals), r_order),
-            "max": np.round(np.max(nmse_vals), r_order),
+            "mean": float(np.round(np.mean(nmse_vals), r_order)),
+            "std": float(np.round(np.std(nmse_vals), r_order)),
+            "min": float(np.round(np.min(nmse_vals), r_order)),
+            "max": float(np.round(np.max(nmse_vals), r_order)),
         },
 
         "acpr_l": {
-            "mean": np.round(np.mean(acpr_l_vals), r_order),
-            "std": np.round(np.std(acpr_l_vals), r_order),
-            "min": np.round(np.min(acpr_l_vals), r_order),
-            "max": np.round(np.max(acpr_l_vals), r_order),
+            "mean": float(np.round(np.mean(acpr_l_vals), r_order)),
+            "std": float(np.round(np.std(acpr_l_vals), r_order)),
+            "min": float(np.round(np.min(acpr_l_vals), r_order)),
+            "max": float(np.round(np.max(acpr_l_vals), r_order)),
         },
 
         "acpr_r": {
-            "mean": np.round(np.mean(acpr_r_vals), r_order),
-            "std": np.round(np.std(acpr_r_vals), r_order),
-            "min": np.round(np.min(acpr_r_vals), r_order),
-            "max": np.round(np.max(acpr_r_vals), r_order),
+            "mean": float(np.round(np.mean(acpr_r_vals), r_order)),
+            "std": float(np.round(np.std(acpr_r_vals), r_order)),
+            "min": float(np.round(np.min(acpr_r_vals), r_order)),
+            "max": float(np.round(np.max(acpr_r_vals), r_order)),
         }
     }
 

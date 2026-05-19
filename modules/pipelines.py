@@ -84,8 +84,10 @@ class SimplePipeline:
         self.pa_model = self.base_model(**self.model_params, model_name="pa")
         
         count_params = self.pa_model.count_params()
+        count_flops = self.pa_model.count_flops()
         count_macs = self.pa_model.count_macs()
         print(f"count_params: {count_params}")
+        print(f"count_flops: {count_flops}")
         print(f"count_macs: {count_macs}")
         
         is_load = self.pa_model.load_weights()
@@ -123,6 +125,7 @@ class SimplePipeline:
             "time_train": time_train,
             "count_params": count_params,
             "count_macs": count_macs,
+            "count_flops": count_flops,
         }
     
     def run_dla(self):
@@ -131,8 +134,10 @@ class SimplePipeline:
         
         count_params = self.dla_model.count_params()
         count_macs = self.dla_model.count_macs()
+        count_flops = self.dla_model.count_flops()
         print(f"count_params: {count_params}")
         print(f"count_macs: {count_macs}")
+        print(f"count_flops: {count_flops}")
         
         is_load = self.dla_model.load_weights()
         casc_dla = utils.CascadeModel(model_1=self.dla_model, 
@@ -191,6 +196,7 @@ class SimplePipeline:
             "time_train": time_train,
             "count_params": count_params,
             "count_macs": count_macs,
+            "count_flops": count_flops,
         }
 
     def run_ila(self):
@@ -199,8 +205,10 @@ class SimplePipeline:
         
         count_params = self.ila_model.count_params()
         count_macs = self.ila_model.count_macs()
+        count_flops = self.ila_model.count_flops()
         print(f"count_params: {count_params}")
         print(f"count_macs: {count_macs}")
+        print(f"count_flops: {count_flops}")
         
         is_load = self.ila_model.load_weights()
         casc_ila_train = utils.CascadeModel(model_1=self.pa_model, model_2=self.ila_model, gain=self.container.gain, cascade_type="ila")
@@ -258,6 +266,7 @@ class SimplePipeline:
             "time_train": time_train,
             "count_params": count_params,
             "count_macs": count_macs,
+            "count_flops": count_flops,
         }
     
     def evaluate_ilc_signal(self):
@@ -301,8 +310,10 @@ class SimplePipeline:
         
         count_params = self.ilc_model.count_params()
         count_macs = self.ilc_model.count_macs()
+        count_flops = self.ilc_model.count_flops()
         print(f"count_params: {count_params}")
         print(f"count_macs: {count_macs}")
+        print(f"count_flops: {count_flops}")
         
         if load_weights:
             is_load = self.ilc_model.load_weights()
@@ -359,6 +370,7 @@ class SimplePipeline:
             "time_train": time_train,
             "count_params": count_params,
             "count_macs": count_macs,
+            "count_flops": count_flops,
         }
     
     def run_ilc_pleann(self, load_weights: bool = True):
@@ -368,8 +380,10 @@ class SimplePipeline:
         
         count_params = self.ilc_model.count_params()
         count_macs = self.ilc_model.count_macs()
+        count_flops = self.ilc_model.count_flops()
         print(f"count_params: {count_params}")
         print(f"count_macs: {count_macs}")
+        print(f"count_flops: {count_flops}")
         
         if load_weights:
             is_load = self.ilc_model.load_weights()
@@ -454,6 +468,7 @@ class SimplePipeline:
             "time_train": time_train,
             "count_params": count_params,
             "count_macs": count_macs,
+            "count_flops": count_flops,
         }
     
     def evaluate_with_statistics(self, arch: str, n_runs: int = 5):

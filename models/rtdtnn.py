@@ -23,18 +23,18 @@ class TransformerEncoderBlock(torch.nn.Module):
     def __init__(self, d_model, nhead, d_ff):
         super().__init__()
         self.attn = torch.nn.MultiheadAttention(d_model, nhead, batch_first=True)
-        self.ln1 = torch.nn.LayerNorm(d_model)
+        # self.ln1 = torch.nn.LayerNorm(d_model)
 
         self.conv1 = torch.nn.Conv1d(d_model, d_ff, kernel_size=1)
         self.conv2 = torch.nn.Conv1d(d_ff, d_model, kernel_size=1)
-        self.ln2 = torch.nn.LayerNorm(d_model)
+        # self.ln2 = torch.nn.LayerNorm(d_model)
 
         # self.activation = torch.nn.Tanh()
         self.activation = torch.nn.Hardswish()
 
     def forward(self, x):
-        x_norm = self.ln1(x)
-        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+        # x = self.ln1(x)
+        attn_out, _ = self.attn(x, x, x)
         x = x + attn_out
         # x = self.ln1(x)
 
@@ -44,8 +44,9 @@ class TransformerEncoderBlock(torch.nn.Module):
         x_cnn = self.conv2(x_cnn)
         x_cnn = self.activation(x_cnn)
         x_cnn = x_cnn.transpose(1, 2)
-
-        x = self.ln2(x + x_cnn)
+        
+        x = x + x_cnn
+        # x = self.ln2(x)
         return x
 
 
@@ -72,13 +73,11 @@ class RTDTNN(BaseModel, torch.nn.Module):
         self.n_fc = n_fc
         self.num_blocks = num_blocks
 
-        self.in_norm = torch.nn.LayerNorm(d_in)
+        # self.in_norm = torch.nn.LayerNorm(d_in)
         
         self.input_fc = torch.nn.Linear(d_in, d_model)
         # self.pos_encoder = PositionalEncoding(d_model)
-        
-        self.pos_emb = torch.nn.Parameter(0.02 * torch.randn(1, self.T, d_model))
-        
+                
         self.encoders = torch.nn.ModuleList(
             [TransformerEncoderBlock(d_model, n_heads, d_ff) for _ in range(num_blocks)]
         )
@@ -98,7 +97,6 @@ class RTDTNN(BaseModel, torch.nn.Module):
         x = self.input_fc(x)
         
         # x = self.pos_encoder(x)
-        x = x + self.pos_emb
 
         for encoder in self.encoders:
             x = encoder(x)

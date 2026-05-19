@@ -167,16 +167,13 @@ class CascadeModel(nn.Module):
         self.normalizer = normalizer
 
     def forward(self, x, deterministic=None):
-        if deterministic:
-            x = self.model_1(x, deterministic=True)
-        else:
-            x = self.model_1(x)
+        x = self.model_1(x)
         
         if self.normalizer:
             x = self.normalizer.inverse_transform(x)
             
-        # if self.cascade_type == "ila" and self.gain:
-        #     x = x / self.gain
+        if self.cascade_type == "ila" and self.gain:
+            x = x / self.gain
         x = self.model_2(x)
         
         return x

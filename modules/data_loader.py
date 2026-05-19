@@ -196,9 +196,11 @@ def build_dataloaders(container: DataContainer,
         y_val = container.val_output_target
         
     elif arch == "ila":
-        x_train = container.train_output / container.gain
+        # x_train = container.train_output / container.gain
+        x_train = container.train_input
         y_train = container.train_input
-        x_val = container.val_output / container.gain
+        # x_val = container.val_output / container.gain
+        x_val = container.val_input
         y_val = container.val_input
     
     elif arch == "ilc":
