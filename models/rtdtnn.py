@@ -3,40 +3,19 @@ import numpy as np
 from models.base_model import BaseModel
 
 
-class PositionalEncoding(torch.nn.Module):
-    def __init__(self, d_model, max_len=5000):
-        super().__init__()
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        seq_len = x.size(1)
-        return x + self.pe[:, :seq_len, :]
-
-
 class TransformerEncoderBlock(torch.nn.Module):
     def __init__(self, d_model, nhead, d_ff):
         super().__init__()
         self.attn = torch.nn.MultiheadAttention(d_model, nhead, batch_first=True)
-        # self.ln1 = torch.nn.LayerNorm(d_model)
 
         self.conv1 = torch.nn.Conv1d(d_model, d_ff, kernel_size=1)
         self.conv2 = torch.nn.Conv1d(d_ff, d_model, kernel_size=1)
-        # self.ln2 = torch.nn.LayerNorm(d_model)
 
-        # self.activation = torch.nn.Tanh()
         self.activation = torch.nn.Hardswish()
 
     def forward(self, x):
-        # x = self.ln1(x)
         attn_out, _ = self.attn(x, x, x)
         x = x + attn_out
-        # x = self.ln1(x)
 
         x_cnn = x.transpose(1, 2)
         x_cnn = self.conv1(x_cnn)
@@ -46,7 +25,7 @@ class TransformerEncoderBlock(torch.nn.Module):
         x_cnn = x_cnn.transpose(1, 2)
         
         x = x + x_cnn
-        # x = self.ln2(x)
+        
         return x
 
 
@@ -72,11 +51,8 @@ class RTDTNN(BaseModel, torch.nn.Module):
         self.d_ff = d_ff
         self.n_fc = n_fc
         self.num_blocks = num_blocks
-
-        # self.in_norm = torch.nn.LayerNorm(d_in)
         
         self.input_fc = torch.nn.Linear(d_in, d_model)
-        # self.pos_encoder = PositionalEncoding(d_model)
                 
         self.encoders = torch.nn.ModuleList(
             [TransformerEncoderBlock(d_model, n_heads, d_ff) for _ in range(num_blocks)]
@@ -84,7 +60,6 @@ class RTDTNN(BaseModel, torch.nn.Module):
         
         self.fc = torch.nn.Linear(self.T * d_model, n_fc)
 
-        # self.activation = torch.nn.Tanh()
         self.activation = torch.nn.Hardswish()
         
         self.out = torch.nn.Linear(n_fc, 2)
@@ -96,8 +71,6 @@ class RTDTNN(BaseModel, torch.nn.Module):
     def forward(self, x):
         x = self.input_fc(x)
         
-        # x = self.pos_encoder(x)
-
         for encoder in self.encoders:
             x = encoder(x)
         
@@ -116,101 +89,160 @@ class RTDTNN(BaseModel, torch.nn.Module):
 
     def count_flops(self) -> int:
         """
-        Approximate FLOPs estimation for RTDTNN (Transformer-based model).
+        Approximate FLOPs estimation for RTDTNN.
 
-        FLOPs are counted for:
-        - one output sample
+        Counted per ONE output sample.
 
-        Notes
-        -----
-
-        Assumptions:
-        - add/sub/mul            : 1 FLOP
-        - tanh                   : 4 FLOPs
-        - Linear                 : 2 * in * out
-        - Conv1d (1x1)           : 2 * in * out
-        - LayerNorm              : ~5 * d_model (approx)
-        - Attention:
-            * QK^T              : 2 * T * d_model
-            * softmax           : ~5 * T * T
-            * AV                : 2 * T * d_model
-        - Multihead scaling ignored in detail (aggregated per model dim)
+        Assumptions
+        -----------
+        - multiply/add                 : 1 FLOP
+        - Linear / Conv1d(1x1)         : 2 * in * out
+        - Hardswish                    : ~4 FLOPs
+        - residual add                 : 1 FLOP
+        - softmax                      : ~5 FLOPs
+        - attention scaling/division   : ignored
 
         Returns
         -------
-        int: FLOPs per one output sample
+        int
+            Approximate FLOPs per sample.
         """
 
         T = self.T
         d_in = self.d_in
         d_model = self.d_model
         d_ff = self.d_ff
-        n_heads = self.n_heads
-        n_blocks = self.num_blocks
         n_fc = self.n_fc
+        n_blocks = self.num_blocks
 
+        total_flops = 0
+
+        # ============================================================
         # INPUT PROJECTION
+        # ============================================================
 
-        input_fc_flops = 2 * d_in * d_model
+        # Linear(d_in -> d_model) for every token
+        #
+        # input shape:
+        # [B, T, d_in]
+        #
+        # output:
+        # [B, T, d_model]
 
+        input_fc_flops = T * (2 * d_in * d_model)
+
+        total_flops += input_fc_flops
+
+        # ============================================================
         # TRANSFORMER BLOCKS
-
-        block_flops = 0
+        # ============================================================
 
         for _ in range(n_blocks):
 
-            # MULTIHEAD ATTENTION (approx aggregated)
+            # --------------------------------------------------------
+            # MULTIHEAD SELF-ATTENTION
+            # --------------------------------------------------------
 
-            # QK^T
-            qk_flops = 2 * T * d_model
+            # Q, K, V projections
+            #
+            # 3x Linear(d_model -> d_model)
 
-            # softmax
+            qkv_flops = 3 * T * (2 * d_model * d_model)
+
+            # Attention scores: Q @ K^T
+            #
+            # [T, d_model] x [d_model, T]
+            #
+            # => [T, T]
+
+            qk_flops = 2 * T * T * d_model
+
+            # Softmax over attention matrix
+
             softmax_flops = 5 * T * T
 
-            # AV
-            av_flops = 2 * T * d_model
+            # Attention-weighted values
+            #
+            # [T, T] x [T, d_model]
 
-            attn_flops = qk_flops + softmax_flops + av_flops
+            av_flops = 2 * T * T * d_model
 
-            # residual + layernorm1
-            ln1_flops = 5 * d_model * T
+            # Output projection
 
-            # CNN part (1x1 convs)
+            out_proj_flops = T * (2 * d_model * d_model)
 
-            conv1_flops = 2 * d_model * d_ff * T
-            conv2_flops = 2 * d_ff * d_model * T
+            # Residual add after attention
 
-            tanh_flops = 4 * T * d_ff + 4 * T * d_model
+            attn_residual_flops = T * d_model
 
-            # residual + layernorm2
-            ln2_flops = 5 * d_model * T
-
-            block_flops += (
-                attn_flops
-                + ln1_flops
-                + conv1_flops
-                + conv2_flops
-                + tanh_flops
-                + ln2_flops
+            attention_flops = (
+                qkv_flops
+                + qk_flops
+                + softmax_flops
+                + av_flops
+                + out_proj_flops
+                + attn_residual_flops
             )
 
-        # FINAL FC HEAD
+            # --------------------------------------------------------
+            # FFN (Conv1d 1x1)
+            # --------------------------------------------------------
 
-        fc_flops = 2 * (T * d_model) * n_fc
+            # Conv1d(d_model -> d_ff)
 
-        # activation
-        act_flops = 4 * n_fc
+            conv1_flops = T * (2 * d_model * d_ff)
 
-        # output layer
+            # Hardswish
+
+            act1_flops = 4 * T * d_ff
+
+            # Conv1d(d_ff -> d_model)
+
+            conv2_flops = T * (2 * d_ff * d_model)
+
+            # Hardswish
+
+            act2_flops = 4 * T * d_model
+
+            # Residual add
+
+            ffn_residual_flops = T * d_model
+
+            ffn_flops = (
+                conv1_flops
+                + act1_flops
+                + conv2_flops
+                + act2_flops
+                + ffn_residual_flops
+            )
+
+            total_flops += attention_flops + ffn_flops
+
+        # ============================================================
+        # FINAL HEAD
+        # ============================================================
+
+        # Flatten:
+        #
+        # [T, d_model] -> [T*d_model]
+
+        flatten_dim = T * d_model
+
+        # FC
+
+        fc_flops = 2 * flatten_dim * n_fc
+
+        # Hardswish
+
+        fc_act_flops = 4 * n_fc
+
+        # Output layer
+
         out_flops = 2 * n_fc * 2
 
-        # TOTAL
-
-        total_flops = (
-            input_fc_flops
-            + block_flops
-            + fc_flops
-            + act_flops
+        total_flops += (
+            fc_flops
+            + fc_act_flops
             + out_flops
         )
 
@@ -225,12 +257,11 @@ class RTDTNN(BaseModel, torch.nn.Module):
         - accumulations
 
         Does NOT count:
+        - Hardswish
         - softmax
-        - LayerNorm
-        - Tanh
-        - reshape/transpose
+        - reshape / transpose
         - residual additions
-        - positional encoding
+        - parameter initialization
 
         Notes
         -----
@@ -249,13 +280,14 @@ class RTDTNN(BaseModel, torch.nn.Module):
         d_model = self.d_model
         d_ff = self.d_ff
         n_fc = self.n_fc
-        n_heads = self.n_heads
         num_blocks = self.num_blocks
 
         total_mac = 0
 
-        # Input projection
-        #
+        # ============================================================
+        # INPUT PROJECTION
+        # ============================================================
+
         # Linear:
         # d_in -> d_model
         #
@@ -265,85 +297,97 @@ class RTDTNN(BaseModel, torch.nn.Module):
 
         total_mac += input_fc_mac
 
-        # Transformer encoder blocks
+        # ============================================================
+        # TRANSFORMER BLOCKS
+        # ============================================================
 
         for _ in range(num_blocks):
 
-            # -----------------------------------------------------
-            # Multihead Attention
+            # --------------------------------------------------------
+            # MULTIHEAD SELF-ATTENTION
+            # --------------------------------------------------------
+
+            # Q, K, V projections
             #
-            # Q, K, V projections:
-            #
-            # 3 * (T * d_model * d_model)
-            # -----------------------------------------------------
+            # 3x Linear(d_model -> d_model)
 
             qkv_mac = 3 * T * d_model * d_model
 
-            # -----------------------------------------------------
+            # --------------------------------------------------------
             # Attention scores
             #
             # Q @ K^T
             #
-            # Shape:
             # [T, d_model] x [d_model, T]
             #
-            # ≈ T^2 * d_model
-            # -----------------------------------------------------
+            # -> [T, T]
+            # --------------------------------------------------------
 
             attention_scores_mac = T * T * d_model
 
-            # -----------------------------------------------------
+            # --------------------------------------------------------
             # Attention-weighted values
             #
             # Attn @ V
             #
-            # ≈ T^2 * d_model
-            # -----------------------------------------------------
+            # [T, T] x [T, d_model]
+            # --------------------------------------------------------
 
-            attention_value_mac = T * T * d_model
+            attention_values_mac = T * T * d_model
 
-            # -----------------------------------------------------
+            # --------------------------------------------------------
             # Output projection
             #
-            # d_model -> d_model
-            # -----------------------------------------------------
+            # Linear(d_model -> d_model)
+            # --------------------------------------------------------
 
             attention_out_mac = T * d_model * d_model
 
-            # -----------------------------------------------------
-            # Feed-forward Conv1d block
-            #
-            # Conv1d(kernel=1)
-            #
-            # d_model -> d_ff
-            # d_ff -> d_model
-            # -----------------------------------------------------
-
-            ffn_mac = (
-                T * d_model * d_ff
-                + T * d_ff * d_model
-            )
-
-            block_mac = (
+            attention_mac = (
                 qkv_mac
                 + attention_scores_mac
-                + attention_value_mac
+                + attention_values_mac
                 + attention_out_mac
-                + ffn_mac
             )
+
+            # --------------------------------------------------------
+            # FFN BLOCK
+            #
+            # Conv1d(kernel=1)
+            # equivalent to token-wise Linear
+            # --------------------------------------------------------
+
+            conv1_mac = T * d_model * d_ff
+
+            conv2_mac = T * d_ff * d_model
+
+            ffn_mac = conv1_mac + conv2_mac
+
+            # --------------------------------------------------------
+
+            block_mac = attention_mac + ffn_mac
 
             total_mac += block_mac
 
-        # Fully-connected layer
-        #
-        # Flatten:
-        # T * d_model -> n_fc
+        # ============================================================
+        # FINAL HEAD
+        # ============================================================
 
-        fc_mac = (T * d_model) * n_fc
+        # Flatten:
+        #
+        # [T, d_model] -> [T*d_model]
+
+        flatten_dim = T * d_model
+
+        # FC:
+        #
+        # T*d_model -> n_fc
+
+        fc_mac = flatten_dim * n_fc
 
         total_mac += fc_mac
 
-        # Output layer
+        # Output:
         #
         # n_fc -> 2
 

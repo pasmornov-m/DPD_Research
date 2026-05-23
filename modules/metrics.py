@@ -414,12 +414,13 @@ class RegLoss(torch.nn.Module):
         self.lambda_reg = lambda_reg
         self.params = list(model.parameters())
         self.num_params = sum(p.numel() for p in self.params)
+        self._eps = 1e-5
     
-    def extra_loss(self, eps=1e-2):
+    def extra_loss(self):
         reg = 0.0
 
         for p in self.params:
-            reg += torch.log10(p.pow(2) + eps).sum()
+            reg += torch.log10(p.pow(2) + self._eps).sum()
 
         return reg / self.num_params
     

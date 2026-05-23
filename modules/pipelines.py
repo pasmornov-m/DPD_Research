@@ -73,8 +73,10 @@ class SimplePipeline:
                                                                             **self.loader_props)
         return train_loader, val_loader, input_norm, target_norm
     
-    def _build_optimizer(self, model):
-        return torch.optim.AdamW(model.parameters(), lr=self.lr)
+    def _build_optimizer(self, model, lr: float | None = None):
+        if lr is None: 
+            lr = self.lr
+        return torch.optim.AdamW(model.parameters(), lr)
     
     def _build_scheduler(self, optimizer):
         return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
@@ -373,59 +375,60 @@ class SimplePipeline:
             "count_flops": count_flops,
         }
     
-    def run_ilc_pleann(self, load_weights: bool = True):
+    def run_ilc_pleann(self, load_model: bool = True):
         print("Run ILC")
 
         self.ilc_model = self.base_model(**self.model_params, model_name="ilc_prune")
         
         count_params = self.ilc_model.count_params()
-        count_macs = self.ilc_model.count_macs()
-        count_flops = self.ilc_model.count_flops()
-        print(f"count_params: {count_params}")
-        print(f"count_macs: {count_macs}")
-        print(f"count_flops: {count_flops}")
+        print(f"Start count_params: {self.ilc_model.count_params()}")
         
-        if load_weights:
-            is_load = self.ilc_model.load_weights()
+        if load_model:
+            is_load_pruned = self.ilc_model.load_weights()
         else:
-            is_load = False
+            is_load_pruned = False
         
-        criterion_reg = metrics.RegLoss(self.ilc_model, 
-                                        original_loss=metrics.compute_mse, 
-                                        lambda_reg=self.train_props['lambda_reg'])
+        if not is_load_pruned:
+            pretrained_model = self.base_model(**self.model_params, model_name="ilc")
 
-        optimizer1 = torch.optim.AdamW(self.ilc_model.parameters(), 
-                                      lr=self.train_props["lr"])
-        scheduler1 = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer1, 
-                                                               mode='min', 
-                                                               factor=0.5, 
-                                                               patience=10)
+            is_load_pretrain = False
+
+            if pretrained_model.load_weights():
+                self.ilc_model.load_state_dict(pretrained_model.state_dict())
+                is_load_pretrain = True
+                print("Loaded pretrained ILC weights")
+            else:
+                raise RuntimeError("Failed to load pretrained ilc model")
+        
+            criterion_reg = metrics.RegLoss(self.ilc_model, 
+                                            original_loss=metrics.compute_mse, 
+                                            lambda_reg=self.train_props['lambda_reg'])
+            
+            optimizer1 = self._build_optimizer(self.ilc_model, lr=self.train_props["lr"])
+            scheduler1 = self._build_scheduler(optimizer1)
 
         time_train = 0
         
-        if not is_load:
+        if not is_load_pruned:
             self.evaluate_ilc_signal()
         
         train_loader, val_loader, input_norm, target_norm = self.prepare_loaders(arch='ilc')
 
-        if not is_load:
+        if not is_load_pruned:
             start = time.time()
-            learning.train(net=self.ilc_model, 
-                        criterion=self.criterion, 
-                        optimizer=optimizer1, 
-                        train_loader=train_loader, 
-                        val_loader=val_loader, 
-                        grad_clip_val=self.grad_clip_val, 
-                        n_epochs=self.epochs, 
-                        metric_criterion=self.metric_criterion,
-                        scheduler=scheduler1)
+            if not is_load_pretrain:
+                learning.train(net=self.ilc_model, 
+                            criterion=self.criterion, 
+                            optimizer=optimizer1, 
+                            train_loader=train_loader, 
+                            val_loader=val_loader, 
+                            grad_clip_val=self.grad_clip_val, 
+                            n_epochs=self.epochs, 
+                            metric_criterion=self.metric_criterion,
+                            scheduler=scheduler1)
             
-            optimizer2 = torch.optim.AdamW(self.ilc_model.parameters(), 
-                                          lr=self.train_props["lr2"])
-            scheduler2 = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer2, 
-                                                                   mode='min', 
-                                                                   factor=0.5, 
-                                                                   patience=10)
+            optimizer2 = self._build_optimizer(self.ilc_model, lr=self.train_props["lr2"])
+            scheduler2 = self._build_scheduler(optimizer2)
             
             learning.train(net=self.ilc_model, 
                 criterion=criterion_reg, 
@@ -459,6 +462,14 @@ class SimplePipeline:
         
         ilc_nmse = metrics.compute_nmse(y_val_ilc, self.container.val_output_target)
         ilc_acpr = metrics.calculate_acpr(y_val_ilc, self.acpr_meter)
+        
+        count_params, count_params_all = prunning.count_sparsity_parameters(self.ilc_model)
+        count_macs = self.ilc_model.count_macs()
+        count_flops = self.ilc_model.count_flops()
+        print(f"count_params: {count_params}")
+        print(f"count_macs: {count_macs}")
+        print(f"count_flops: {count_flops}")
+        
         print(f"[ILC] NMSE: {ilc_nmse:.2f}, ACPR: {ilc_acpr[0]:.2f} {ilc_acpr[1]:.2f}, count_params: {count_params}")
 
         self.results["ilc_pleann"] = {
@@ -495,7 +506,7 @@ class SimplePipeline:
             if arch != "pa" and self.pa_model is None:
                 raise AttributeError("pa_model not found in pipeline")
 
-            arch_method(load_weights=False)
+            arch_method(load_model=False)
             stats = copy.deepcopy(self.results[arch])
             statistics_list.append(stats)
         

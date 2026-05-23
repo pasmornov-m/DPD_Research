@@ -6,7 +6,7 @@ import torch.nn.utils.prune as prune
 from modules import data_loader, metrics, learning, utils, pipelines
 
 
-def count_sparsity_parameters(model, only_weights=True) -> tuple[int, int]:
+def count_sparsity_parameters(model, only_weights=False) -> tuple[int, int]:
     """
     Returns:
         tuple[int, int]: A tuple containing:
@@ -20,7 +20,7 @@ def count_sparsity_parameters(model, only_weights=True) -> tuple[int, int]:
     for module_name, module in model.named_modules():
         layer_nonzero = 0
         layer_total = 0
-        layer_has_params = False
+        # layer_has_params = False
 
         for param_name, param in module.named_parameters(recurse=False):
             if only_weights and "weight" not in param_name:
@@ -36,7 +36,7 @@ def count_sparsity_parameters(model, only_weights=True) -> tuple[int, int]:
 
             layer_nonzero += nonzero
             layer_total += total
-            layer_has_params = True            
+            # layer_has_params = True
 
         total_nonzero += layer_nonzero
         total_params += layer_total
@@ -53,8 +53,9 @@ def log_layerwise_sparsity(model, only_weights: bool = True, eps: float = 0.0):
         only_weights (bool): log only parameters containing 'weight'
         eps (float): threshold to consider a value as zero
     """
+
     total_nonzero = 0
-    total_params = model.count_params()
+    total_params = 0
 
     print("=" * 72)
     print("Layer-wise sparsity report")
@@ -66,6 +67,7 @@ def log_layerwise_sparsity(model, only_weights: bool = True, eps: float = 0.0):
         layer_has_params = False
 
         for param_name, param in module.named_parameters(recurse=False):
+
             if only_weights and "weight" not in param_name:
                 continue
 
@@ -74,28 +76,26 @@ def log_layerwise_sparsity(model, only_weights: bool = True, eps: float = 0.0):
 
             data = param.detach()
 
-            nonzero = (data.abs() > 0).sum().item()
+            nonzero = (data.abs() > eps).sum().item()
             total = data.numel()
 
             layer_nonzero += nonzero
             layer_total += total
+
+            total_nonzero += nonzero
+            total_params += total
+
             layer_has_params = True
 
-            print(
-                f"{module_name or '<root>'}.{param_name:20s} | "
-                f"nonzero: {nonzero:8d} / {total:8d} "
-                f"({nonzero / total:6.2%})"
-            )
+            print(f"{module_name or '<root>'}.{param_name:20s} | "
+                  f"nonzero: {nonzero:8d} / {total:8d} "
+                  f"({nonzero / total:6.2%})")
 
         if layer_has_params:
-            print(
-                f"{module_name or '<root>':24s} | "
-                f"LAYER TOTAL: {layer_nonzero:8d} / {layer_total:8d} "
-                f"({layer_nonzero / layer_total:6.2%})"
-            )
+            print(f"{module_name or '<root>':24s} | "
+                  f"LAYER TOTAL: {layer_nonzero:8d} / {layer_total:8d} "
+                  f"({layer_nonzero / layer_total:6.2%})")
             print("-" * 72)
-
-        total_nonzero += layer_nonzero
 
     print("=" * 72)
     print(
