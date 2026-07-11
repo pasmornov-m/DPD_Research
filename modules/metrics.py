@@ -105,15 +105,22 @@ def compute_signal_power(signal: torch.Tensor) -> torch.Tensor:
 
 
 def power_spectrum(input_data, fs, nperseg, window_size=None):
-    input_data = iq_to_complex(input_data)
+    if not input_data.is_complex():
+        input_data = iq_to_complex(input_data)
     if isinstance(input_data, torch.Tensor):
         input_data = input_data.detach().cpu().numpy()
+    
     _, spectrum = welch(input_data, fs=fs, nperseg=nperseg)
     freqs = np.fft.fftshift(np.fft.fftfreq(len(spectrum), d=1/fs))
     spectrum = np.fft.fftshift(spectrum)
+    
     if window_size:
         freqs, spectrum = moving_average(spectrum, freqs, fs, window_size)
-    spectrum_db = 10 * np.log10(np.abs(spectrum))
+    
+    spectrum = np.abs(spectrum)
+    spectrum_norm = spectrum / np.max(spectrum)
+    spectrum_db = 10 * np.log10(spectrum_norm + 1e-12)
+    
     return freqs, spectrum_db
 
 def calculate_acpr(input_data, acpr_meter):
