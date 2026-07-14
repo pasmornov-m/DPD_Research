@@ -412,27 +412,90 @@ class ACPR:
         return tuple(outputs) if len(outputs) > 1 else acpr
 
 
-class RegLoss(torch.nn.Module):
-    def __init__(self, model, original_loss, lambda_reg: float = 1e-4):
-        super().__init__()
-        
-        self.model = model
-        self.original_loss = original_loss
-        self.lambda_reg = lambda_reg
-        self.params = list(model.parameters())
-        self.num_params = sum(p.numel() for p in self.params)
-        self._eps = 1e-5
-    
-    def extra_loss(self):
-        reg = 0.0
 
-        for p in self.params:
-            reg += torch.log10(p.pow(2) + self._eps).sum()
+def compute_acepr(
+        measured: torch.Tensor,
+        predicted: torch.Tensor,
+        fs: float,
+        main_bandwidth: float,
+        adjacent_bandwidth: float,
+        channel_offset: float,
+        nperseg: int = 4096,
+        eps: float = 1e-12
+):
+    """
+    Compute Adjacent Channel Error Power Ratio (ACEPR).
 
-        return reg / self.num_params
-    
-    def forward(self, prediction, target):
-        base_loss = self.original_loss(prediction, target)
-        reg = self.extra_loss()
-        
-        return base_loss + self.lambda_reg * reg
+    Parameters
+    ----------
+    measured : torch.Tensor
+        Real PA output signal (complex or IQ format)
+
+    predicted : torch.Tensor
+        Model output signal (complex or IQ format)
+
+    fs : float
+        Sampling frequency [Hz]
+
+    main_bandwidth : float
+        Main channel bandwidth [Hz]
+
+    adjacent_bandwidth : float
+        Adjacent channel bandwidth [Hz]
+
+    channel_offset : float
+        Offset from carrier to adjacent channel center [Hz]
+
+    nperseg : int
+        Welch FFT segment length
+
+    eps : float
+        Numerical stability constant
+
+    Returns
+    -------
+    acepr_db : float
+        ACEPR in dB
+    """
+
+    # Convert IQ to complex if needed
+    if not measured.is_complex():
+        measured = utils.iq_to_complex(measured)
+
+    if not predicted.is_complex():
+        predicted = utils.iq_to_complex(predicted)
+
+    # Error signal
+    error = measured - predicted
+
+    # Torch to numpy
+    measured = measured.detach().cpu().numpy()
+    error = error.detach().cpu().numpy()
+
+    # PSD estimation
+    freqs, psd_main = welch(measured, fs=fs, nperseg=nperseg, return_onesided=False)
+
+    _, psd_error = welch(error, fs=fs, nperseg=nperseg, return_onesided=False)
+
+    # Shift spectrum
+    freqs = np.fft.fftshift(freqs)
+    psd_main = np.fft.fftshift(psd_main)
+    psd_error = np.fft.fftshift(psd_error)
+
+    # Main channel mask
+    main_mask = (np.abs(freqs) <= main_bandwidth / 2)
+
+    # Right adjacent channel
+    adj_right_mask = ((freqs >= channel_offset - adjacent_bandwidth/2) & (freqs <= channel_offset + adjacent_bandwidth/2))
+
+    # Left adjacent channel
+    adj_left_mask = ((freqs >= -channel_offset - adjacent_bandwidth/2) &(freqs <= -channel_offset + adjacent_bandwidth/2))
+
+    # Integrate PSD
+    df = freqs[1] - freqs[0]
+    main_power = np.sum(psd_main[main_mask]) * df
+    adjacent_error_power = (np.sum(psd_error[adj_right_mask]) + np.sum(psd_error[adj_left_mask])) * df
+
+    acepr = 10 * np.log10(adjacent_error_power / (main_power + eps))
+
+    return float(acepr)
