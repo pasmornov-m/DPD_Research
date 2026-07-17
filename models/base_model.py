@@ -12,12 +12,13 @@ class BaseModel:
         self.params_directory = params_directory
         self._EPS = 1e-12
     
-    def count_params(self) -> int:
+    def count_params(self, is_requires_grad: bool = True) -> int:
         total = 0
 
         for p in self.parameters():
-            if not p.requires_grad:
-                continue
+            if is_requires_grad:
+                if not p.requires_grad:
+                    continue
 
             n = p.numel()
 
