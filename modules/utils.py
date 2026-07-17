@@ -27,10 +27,13 @@ def moving_average(arr, freqs, fs, window_size):
     return f_smoothed, psd_smoothed
 
 def iq_to_complex(iq_signal):
-    i_values = iq_signal[..., 0]
-    q_values = iq_signal[..., 1]
-    complex_signals = i_values + 1j * q_values
-    return complex_signals
+    if len(iq_signal.shape) == 2 and iq_signal.shape[-1] == 2:
+        i_values = iq_signal[..., 0]
+        q_values = iq_signal[..., 1]
+        complex_signals = i_values + 1j * q_values
+        return complex_signals
+    else:
+        raise ValueError(f"Unsupported  shape: {iq_signal.shape}")
 
 def complex_to_iq(complex_signal):
     return torch.view_as_real(complex_signal)
