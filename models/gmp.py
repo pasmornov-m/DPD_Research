@@ -363,3 +363,108 @@ class GMP(BaseModel, nn.Module):
             total_mac += term_c_mac
 
         return int(total_mac)
+
+
+class GMPTensor(torch.nn.Module, BaseModel):
+
+    def __init__(self, M1, M2, P, model_name: str = ""):
+        torch.nn.Module.__init__(self)
+        BaseModel.__init__(self, model_name=model_name)
+
+        self.M1=M1
+        self.M2=M2
+        self.P=P
+        
+        self.register_buffer("S", 0.001 * torch.randn(M1, M2, P, dtype=torch.complex64))
+        self.register_buffer('powers', torch.arange(P, dtype=torch.int))
+        self.register_buffer('arange_M1', torch.arange(M1, dtype=torch.int))
+        self.register_buffer('arange_M2', torch.arange(M2, dtype=torch.int))
+        self.register_buffer('delay', torch.tensor(max(self.M1, self.M2)-1, dtype=torch.int))
+    
+    def set_parameters(self, S_new):
+        """Update parameters"""
+        self.S.copy_(S_new)
+
+    def forward(self, x):
+        N = len(x)-self.delay
+
+        n_idx = torch.arange(N)[:, None]
+
+        i_idx = self.arange_M1[None,:]
+        j_idx = self.arange_M2[None,:]
+
+        x_i = x[self.delay+n_idx-i_idx] # (N,M1)
+
+        x_j = x[self.delay+n_idx-j_idx] # (N,M2)
+
+        abs_xj = torch.abs(x_j)
+        abs_powers = (abs_xj[:,:,None]**self.powers[None,None,:]) # (N,M2,P)
+
+        Phi = (x_i[:, :, None, None] * abs_powers[:, None, :, :]) # (N,M1,M2,P)
+
+        Phi = Phi.reshape(N, self.M1*self.M2*self.P)
+        S_vec = self.S.reshape(-1)
+        y = Phi @ S_vec
+
+        return y
+
+
+class GMPCP(torch.nn.Module, BaseModel):
+    def __init__(self, R, M1, M2, P, model_name: str = "", use_even_powers: bool = False):
+        torch.nn.Module.__init__(self)
+        BaseModel.__init__(self, model_name=model_name)
+        
+        self.R, self.M1, self.M2, self.P = R, M1, M2, P
+        
+        self.register_buffer('a', 0.1 * torch.randn(M1, R, dtype=torch.complex64))
+        self.register_buffer('b', 0.1 * torch.randn(M2, R, dtype=torch.complex64))
+        self.register_buffer('c', 0.1 * torch.randn(P, R, dtype=torch.complex64))
+        
+        self.max_delay = max(self.M1, self.M2) - 1
+        self.register_buffer('M1_arange', torch.arange(self.M1))
+        self.register_buffer('M2_arange', torch.arange(self.M2))
+        
+        if use_even_powers:
+            self.register_buffer('powers_arange', torch.arange(self.P) * 2)
+        else:
+            self.register_buffer('powers_arange', torch.arange(self.P))
+    
+    def _get_filename(self):
+        return (f"{self.model_name}_{self.class_name}_"
+                f"R({self.R})_M1({self.M1})_"
+                f"M2({self.M2})_P({self.P}).pt")
+    
+    def set_parameters(self, a_new, b_new, c_new):
+        """Update parameters"""
+        self.a.copy_(a_new)
+        self.b.copy_(b_new)
+        self.c.copy_(c_new)
+    
+    @utils.iq_handler
+    def forward(self, x):
+        """
+        x: (T,) — комплексный входной сигнал
+        returns: (T,) — комплексный выходной сигнал
+        """
+        T = x.shape[0]
+        T_cut = T - self.max_delay
+        
+        y = torch.zeros(T_cut, dtype=torch.complex64, device=x.device)
+                
+        for n in range(T_cut):
+            t = n + self.max_delay
+            # t = t_range[n]
+
+            delays_m1 = x[t - self.M1_arange]
+            sum_i = torch.matmul(self.a.T, delays_m1)
+            
+            delays = x[t - self.M2_arange]
+            abs_delays = torch.abs(delays)
+            abs_powers = (abs_delays[:, None] ** self.powers_arange[None, :]).to(torch.complex64)
+            
+            bc = self.b[:, None, :] * self.c[None, :, :]
+            sum_jp = torch.einsum('mpr,mp->r', bc, abs_powers,)
+            
+            y[n] = torch.sum(sum_i * sum_jp)
+        
+        return y

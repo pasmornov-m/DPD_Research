@@ -32,6 +32,8 @@ def iq_to_complex(iq_signal):
         q_values = iq_signal[..., 1]
         complex_signals = i_values + 1j * q_values
         return complex_signals
+    elif iq_signal.is_complex():
+        return iq_signal
     else:
         raise ValueError(f"Unsupported  shape: {iq_signal.shape}")
 

@@ -55,16 +55,18 @@ class DataContainer:
         
         self.gain = None
         
-    def load_data(self, file_path: str):
-        with open(f'{file_path}/spec.json') as json_file:
-            config = json.load(json_file)
+    def load_data(self, file_path: str, is_load_spec: bool = True):
         
-        self.input_signal_fs = config['input_signal_fs']
-        self.bw_main_ch = config['bw_main_ch']
-        self.nperseg = config['nperseg']
-        self.bw_sub_ch = config['bw_sub_ch']
-        self.n_sub_ch = config['n_sub_ch']
-        self.sub_ch = config['sub_ch']
+        if is_load_spec:
+            with open(f'{file_path}/spec.json') as json_file:
+                config = json.load(json_file)
+        
+            self.input_signal_fs = config['input_signal_fs']
+            self.bw_main_ch = config['bw_main_ch']
+            self.nperseg = config['nperseg']
+            self.bw_sub_ch = config['bw_sub_ch']
+            self.n_sub_ch = config['n_sub_ch']
+            self.sub_ch = config['sub_ch']
             
         self.train_input = load_csv_to_tensor(f"{file_path}/train_input.csv")
         self.train_output = load_csv_to_tensor(f"{file_path}/train_output.csv")
@@ -104,6 +106,44 @@ class DataContainer:
             "ilc_train_output": self.ilc_train_output,
             "ilc_val_output": self.ilc_val_output
         }
+    
+    def to_complex(self):
+        attrs = [
+            "train_input",
+            "train_input_orig",
+            "train_output",
+            "val_input",
+            "val_input_orig",
+            "val_output",
+            "train_output_target",
+            "val_output_target",
+            "ilc_train_output",
+            "ilc_val_output",
+        ]
+
+        for attr in attrs:
+            value = getattr(self, attr, None)
+            if value is not None:
+                setattr(self, attr, utils.iq_to_complex(value))
+    
+    def to_iq(self):
+        attrs = [
+            "train_input",
+            "train_input_orig",
+            "train_output",
+            "val_input",
+            "val_input_orig",
+            "val_output",
+            "train_output_target",
+            "val_output_target",
+            "ilc_train_output",
+            "ilc_val_output",
+        ]
+
+        for attr in attrs:
+            value = getattr(self, attr, None)
+            if value is not None:
+                setattr(self, attr, utils.complex_to_iq(value))
     
     def reset_ilc(self):
         """Reset ILC signals (u_k_train & u_k_val) to None"""
