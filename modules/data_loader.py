@@ -393,3 +393,57 @@ def build_nn_dataloaders(container,
     val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size_eval, shuffle=False)
     
     return train_dataloader, val_dataloader, input_norm, target_norm
+
+
+def prepare_data_for_als(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    M1: int,
+    M2: int,
+    P: int,
+    N: int,
+):
+    """_summary_
+
+    Args:
+        x (torch.Tensor): _description_
+        y (torch.Tensor): _description_
+        M1 (int): _description_
+        M2 (int): _description_
+        P (int): _description_
+        N (int): _description_
+
+    Returns:
+        y_vec, H, M (tuple[Tensor, Tensor, Tensor]): _description_
+    """
+    
+    x = utils.iq_to_complex(x)
+    y = utils.iq_to_complex(y)
+    
+    T = len(x)
+    max_delay = max(M1, M2) - 1
+    
+    start_idx = max_delay
+    assert start_idx + N <= T, f"Too short dataset"
+    
+    # Выход
+    y_vec = y[start_idx:start_idx + N]
+    
+    # Матрица H
+    n_indices = torch.arange(N)[:, None]  # (N, 1)
+    i_indices = torch.arange(M1)[None, :]  # (1, M1)
+    idx_matrix = start_idx + n_indices - i_indices  # (N, M1)
+    
+    H = x[idx_matrix]  # (N, M1)
+    
+    # Тензор M
+    j_indices = torch.arange(M2)[None, :]
+    idx_matrix_j = start_idx + n_indices - j_indices  # (N, M2)
+    abs_vals = torch.abs(x[idx_matrix_j])  # (N, M2)
+    
+    # Возводим в степени
+    M = torch.zeros((N, M2, P), dtype=torch.complex64)
+    for p in range(P):
+        M[:, :, p] = abs_vals ** p
+    
+    return y_vec, H, M

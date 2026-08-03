@@ -410,7 +410,7 @@ class GMPTensor(torch.nn.Module, BaseModel):
 
 
 class GMPCP(torch.nn.Module, BaseModel):
-    def __init__(self, R, M1, M2, P, model_name: str = "", use_even_powers: bool = False):
+    def __init__(self, R, M1, M2, P, model_name: str = "", *args, **kwargs):
         torch.nn.Module.__init__(self)
         BaseModel.__init__(self, model_name=model_name)
         
@@ -424,10 +424,14 @@ class GMPCP(torch.nn.Module, BaseModel):
         self.register_buffer('M1_arange', torch.arange(self.M1))
         self.register_buffer('M2_arange', torch.arange(self.M2))
         
-        if use_even_powers:
-            self.register_buffer('powers_arange', torch.arange(self.P) * 2)
-        else:
-            self.register_buffer('powers_arange', torch.arange(self.P))
+        self.register_buffer('bc_real', None)
+        self.register_buffer('bc_imag', None)
+        self._get_cache_bc()
+            
+    def _get_cache_bc(self):
+        bc = self.b[:, None, :] * self.c[None, :, :]
+        self.bc_real = bc.real
+        self.bc_imag = bc.imag
     
     def _get_filename(self):
         return (f"{self.model_name}_{self.class_name}_"
@@ -439,6 +443,15 @@ class GMPCP(torch.nn.Module, BaseModel):
         self.a.copy_(a_new)
         self.b.copy_(b_new)
         self.c.copy_(c_new)
+        self._get_cache_bc()
+    
+    def compute_powers(self, x, P):
+        powers = [torch.ones_like(x)]
+        
+        for _ in range(1, P):
+            powers.append(powers[-1] * x)
+
+        return torch.stack(powers, dim=-1)
     
     @utils.iq_handler
     def forward(self, x):
@@ -448,23 +461,23 @@ class GMPCP(torch.nn.Module, BaseModel):
         """
         T = x.shape[0]
         T_cut = T - self.max_delay
-        
-        y = torch.zeros(T_cut, dtype=torch.complex64, device=x.device)
-                
-        for n in range(T_cut):
-            t = n + self.max_delay
-            # t = t_range[n]
+        T_cut_processed_range = torch.arange(T_cut)[:, None] + self.max_delay
 
-            delays_m1 = x[t - self.M1_arange]
-            sum_i = torch.matmul(self.a.T, delays_m1)
+        if (self.bc_real is None) or (self.bc_imag is None):
+            self._get_cache_bc()
             
-            delays = x[t - self.M2_arange]
-            abs_delays = torch.abs(delays)
-            abs_powers = (abs_delays[:, None] ** self.powers_arange[None, :]).to(torch.complex64)
-            
-            bc = self.b[:, None, :] * self.c[None, :, :]
-            sum_jp = torch.einsum('mpr,mp->r', bc, abs_powers,)
-            
-            y[n] = torch.sum(sum_i * sum_jp)
+        
+        indices_m1 = (T_cut_processed_range - self.M1_arange)
+        delays_m1 = x[indices_m1]
+        sum_i = delays_m1 @ self.a
+        
+        indices_m2 = (T_cut_processed_range - self.M2_arange)
+        abs_x = torch.abs(x)
+        abs_delays_m2 = abs_x[indices_m2]
+        abs_powers = self.compute_powers(abs_delays_m2, self.P)
+                
+        sum_jp = torch.einsum('tmp,mpr->tr', abs_powers, self.bc_real) + 1j * torch.einsum('tmp,mpr->tr', abs_powers, self.bc_imag)
+        
+        y = (sum_i * sum_jp).sum(dim=1)
         
         return y

@@ -186,3 +186,93 @@ def net_inference(net, x, model_type=None):
     result = torch.squeeze(result)
         
     return result
+
+
+def ridge_ls(x, y, gamma):
+    """
+    Solve
+
+        min ||y - x w||² + gamma ||w||²
+
+    x : (N, K)
+    y   : (N,)
+    """
+    
+    if gamma == 0:
+        return torch.linalg.lstsq(x, y).solution
+
+    K = x.shape[1]
+
+    A = torch.matmul(x.conj().T, x)
+    b = torch.matmul(x.conj().T, y)
+
+    if gamma > 0:
+        A = A + gamma * torch.eye(K, dtype=A.dtype, device=A.device)
+        
+    w = torch.linalg.solve(A, b)
+
+    return w
+
+
+def als_identification_of_gmpcp(model, y_vec, H, M, N, L, gamma):
+    """
+    ALS GMP-CP
+
+    Parameters
+    ----------
+    model : GMPCP
+    x, y  : training signals
+    L     : number of ALS iterations
+    gamma : ridge parameter
+    """
+    
+
+    R = model.R
+    M1 = model.M1
+    M2 = model.M2
+    P = model.P
+    
+    A = model.a.clone()
+    B = model.b.clone()
+    C = model.c.clone()
+    
+    for _ in range(L):
+        
+        # A
+
+        MBC = torch.einsum('njp,jr,pr->nr', M, B, C)
+        
+        D = H[:, :, None] * MBC[:, None, :]
+        D = D.reshape(N, M1 * R)
+        
+        a = ridge_ls(D, y_vec, gamma)
+        A = a.reshape(M1, R)
+        
+        # B
+        
+        HA = H @ A
+
+        MC = torch.einsum('njp,pr->njr', M, C)
+
+        E = MC * HA[:, None, :]
+        E = E.reshape(N, M2 * R)
+
+        b = ridge_ls(E, y_vec, gamma)
+        B = b.reshape(M2, R)
+        
+        # C
+        
+        HA = H @ A
+
+        MB = torch.einsum('njp,jr->npr', M, B)
+
+        F = MB * HA[:, None, :]
+        F = F.reshape(N, P * R)
+
+        c = ridge_ls(F, y_vec, gamma)
+        C = c.reshape(P, R)
+
+    model.set_parameters(A, B, C)
+
+    return model
+        
