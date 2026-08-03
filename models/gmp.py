@@ -416,9 +416,9 @@ class GMPCP(torch.nn.Module, BaseModel):
         
         self.R, self.M1, self.M2, self.P = R, M1, M2, P
         
-        self.register_buffer('a', 0.1 * torch.randn(M1, R, dtype=torch.complex64))
-        self.register_buffer('b', 0.1 * torch.randn(M2, R, dtype=torch.complex64))
-        self.register_buffer('c', 0.1 * torch.randn(P, R, dtype=torch.complex64))
+        self.register_buffer('a', 0.0001 * torch.randn(M1, R, dtype=torch.complex64))
+        self.register_buffer('b', 0.0001 * torch.randn(M2, R, dtype=torch.complex64))
+        self.register_buffer('c', 0.0001 * torch.randn(P, R, dtype=torch.complex64))
         
         self.max_delay = max(self.M1, self.M2) - 1
         self.register_buffer('M1_arange', torch.arange(self.M1))

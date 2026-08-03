@@ -104,7 +104,7 @@ def compute_signal_power(signal: torch.Tensor) -> torch.Tensor:
     return power
 
 
-def power_spectrum(input_data, fs, nperseg, window_size=None):
+def power_spectrum(input_data, fs, nperseg, window_size=None, normalization: bool = True):
     if not input_data.is_complex():
         input_data = iq_to_complex(input_data)
     if isinstance(input_data, torch.Tensor):
@@ -118,8 +118,9 @@ def power_spectrum(input_data, fs, nperseg, window_size=None):
         freqs, spectrum = moving_average(spectrum, freqs, fs, window_size)
     
     spectrum = np.abs(spectrum)
-    spectrum_norm = spectrum / np.max(spectrum)
-    spectrum_db = 10 * np.log10(spectrum_norm + 1e-12)
+    if normalization:
+        spectrum = spectrum / np.max(spectrum)
+    spectrum_db = 10 * np.log10(spectrum + 1e-20)
     
     return freqs, spectrum_db
 
