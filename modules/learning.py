@@ -200,6 +200,7 @@ def ridge_ls(x, y, gamma):
     
     if gamma == 0:
         return torch.linalg.lstsq(x, y).solution
+        # return torch.linalg.pinv(x) @ y
 
     K = x.shape[1]
 
@@ -208,8 +209,9 @@ def ridge_ls(x, y, gamma):
 
     if gamma > 0:
         A = A + gamma * torch.eye(K, dtype=A.dtype, device=A.device)
-        
+
     w = torch.linalg.solve(A, b)
+    # w = torch.linalg.pinv(A) @ b
 
     return w
 

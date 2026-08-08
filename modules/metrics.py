@@ -25,26 +25,34 @@ def compute_mse(y_hat: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
 
 def compute_nmse(y_hat: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    if torch.is_complex(y_hat):
-        y_hat = torch.view_as_real(y_hat)
-    if torch.is_complex(y):
-        y = torch.view_as_real(y)
-        
+    """
+    NMSE:
+        10 * log10(
+            sum(|y_hat - y|^2) /
+            sum(|y|^2)
+        )
+
+    Supports real and complex tensors.
+    """
+
     if y_hat.shape != y.shape:
-        raise ValueError(f"Формы входов не совпадают: y_hat {y_hat.shape}, y {y.shape}")
-    if y_hat.shape[-1] != 2:
-        raise ValueError("Ожидается последний размер = 2 (I, Q)")
-    
-    mse = F.mse_loss(y_hat, y)
-    energy = (y ** 2).mean()
-    if energy == 0:
-        raise ZeroDivisionError("Energy of the ground truth is zero.")
-    nmse = mse / energy
+        raise ValueError(f"Shape mismatch: y_hat={y_hat.shape}, y={y.shape}")
+
+    error = y_hat - y
+
+    numerator = torch.sum(torch.abs(error) ** 2)
+    denominator = torch.sum(torch.abs(y) ** 2)
+
+    if denominator == 0:
+        raise ZeroDivisionError("Energy of target signal is zero.")
+
+    nmse = numerator / denominator
+
     return 10 * torch.log10(nmse)
 
 
 def calculate_am_am(input_data: torch.Tensor, output_data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    assert input_data.shape == output_data.shape, "input_data and output_data must have the same shape"
+    assert input_data.shape == output_data.shape, f"input_data and output_data must have the same shape, but {input_data.shape} and {output_data.shape}"
 
     input_amplitude = torch.abs(input_data)
     output_amplitude = torch.abs(output_data)
@@ -65,6 +73,8 @@ def calculate_am_pm(input_data: torch.Tensor, output_data: torch.Tensor) -> Tupl
     phase_difference = torch.zeros_like(input_amplitude)
     phase_difference[valid_indices] = torch.angle(output_data[valid_indices]) - torch.angle(input_data[valid_indices])
 
+    phase_difference = np.unwrap(phase_difference)
+
     two_pi = 2 * torch.pi
     for i in range(1, len(phase_difference)):
         delta = phase_difference[i] - phase_difference[i - 1]
@@ -73,9 +83,11 @@ def calculate_am_pm(input_data: torch.Tensor, output_data: torch.Tensor) -> Tupl
         elif delta < -torch.pi:
             phase_difference[i:] += two_pi
 
-    # Приведение к диапазону [-180, 180]
-    phase_difference = torch.rad2deg(phase_difference)
+    phase_difference = np.rad2deg(phase_difference)
     phase_difference = (phase_difference + 180) % 360 - 180
+    
+    # phase_difference = np.unwrap(phase_difference)
+    # phase_difference = np.rad2deg(phase_difference)
     
     return input_amplitude, phase_difference
 

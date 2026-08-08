@@ -374,35 +374,35 @@ class GMPTensor(torch.nn.Module, BaseModel):
         self.M1=M1
         self.M2=M2
         self.P=P
-        
+                
         self.register_buffer("S", 0.001 * torch.randn(M1, M2, P, dtype=torch.complex64))
-        self.register_buffer('powers', torch.arange(P, dtype=torch.int))
-        self.register_buffer('arange_M1', torch.arange(M1, dtype=torch.int))
-        self.register_buffer('arange_M2', torch.arange(M2, dtype=torch.int))
+        self.register_buffer('powers', (2*torch.arange(P, dtype=torch.int))[None,None,:])
+        self.register_buffer('arange_M1', torch.arange(M1, dtype=torch.int)[None,:])
+        self.register_buffer('arange_M2', torch.arange(M2, dtype=torch.int)[None,:])
         self.register_buffer('delay', torch.tensor(max(self.M1, self.M2)-1, dtype=torch.int))
     
     def set_parameters(self, S_new):
         """Update parameters"""
         self.S.copy_(S_new)
+    
+    def get_delay(self):
+            return self.delay
 
     def forward(self, x):
         N = len(x)-self.delay
 
         n_idx = torch.arange(N)[:, None]
-
-        i_idx = self.arange_M1[None,:]
-        j_idx = self.arange_M2[None,:]
+        i_idx = self.arange_M1
+        j_idx = self.arange_M2
 
         x_i = x[self.delay+n_idx-i_idx] # (N,M1)
-
         x_j = x[self.delay+n_idx-j_idx] # (N,M2)
 
         abs_xj = torch.abs(x_j)
-        abs_powers = (abs_xj[:,:,None]**self.powers[None,None,:]) # (N,M2,P)
+        abs_powers = (abs_xj[:,:,None]**self.powers) # (N,M2,P)
 
         Phi = (x_i[:, :, None, None] * abs_powers[:, None, :, :]) # (N,M1,M2,P)
-
-        Phi = Phi.reshape(N, self.M1*self.M2*self.P)
+        Phi = Phi.reshape(N, self.M1 * self.M2 * self.P)
         S_vec = self.S.reshape(-1)
         y = Phi @ S_vec
 
@@ -437,6 +437,9 @@ class GMPCP(torch.nn.Module, BaseModel):
         return (f"{self.model_name}_{self.class_name}_"
                 f"R({self.R})_M1({self.M1})_"
                 f"M2({self.M2})_P({self.P}).pt")
+        
+    def get_delay(self):
+        return self.max_delay
     
     def set_parameters(self, a_new, b_new, c_new):
         """Update parameters"""

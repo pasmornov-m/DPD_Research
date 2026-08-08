@@ -149,6 +149,9 @@ class DataContainer:
         """Reset ILC signals (u_k_train & u_k_val) to None"""
         self.u_k_train = None
         self.u_k_val = None
+    
+    def get_gain(self):
+        return self.gain
 
 
 class IQDataset(torch.utils.data.Dataset):
